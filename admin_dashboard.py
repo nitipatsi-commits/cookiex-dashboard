@@ -1,3 +1,5 @@
+import random
+import string
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -101,7 +103,11 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             submitted = st.form_submit_button("➕ สร้างคีย์ใหม่")
 
             if submitted:
-                final_key = new_key.strip() if new_key.strip() else str(uuid.uuid4())
+                if new_key.strip():
+                    final_key = new_key.strip()
+                else:
+                    chars = string.ascii_uppercase + string.digits
+                    final_key = ''.join(random.choices(chars, k=10))
                 exp_date = (datetime.now() + timedelta(days=days_valid)).strftime("%Y-%m-%d")
                 payload = {
                     "license_key": final_key,
@@ -174,33 +180,28 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 # --- ฝั่งขวา: สถานะ / ปลด HWID / ลบคีย์ ---
                 with col_b:
                     st.markdown("##### ⚙️ จัดการสถานะ & HWID")
-                    
-                    # 🟢 ระบุ ID และ License Key ปัจจุบันให้ชัดเจนป้องกันผิดคีย์
-                    target_id = selected_item["id"]
-                    target_key = selected_item["license_key"]
                     current_active = selected_item.get("is_active", True)
                     
                     # สวิตช์ เปิด/ปิด คีย์
-                    new_active = st.checkbox("สถานะเปิดใช้งาน (is_active)", value=current_active, key=f"active_{target_id}")
+                    new_active = st.checkbox("สถานะเปิดใช้งาน (is_active)", value=current_active)
                     if new_active != current_active:
-                        if st.button("🔄 อัปเดตสถานะการใช้งาน", key=f"btn_act_{target_id}"):
-                            supabase.table("licenses").update({"is_active": new_active}).eq("id", target_id).execute()
-                            st.success(f"อัปเดตสถานะคีย์ {target_key} สำเร็จ!")
+                        if st.button("🔄 อัปเดตสถานะการใช้งาน"):
+                            supabase.table("licenses").update({"is_active": new_active}).eq("id", selected_id).execute()
+                            st.success("อัปเดตสถานะสำเร็จ!")
                             st.rerun()
 
                     # ปุ่มปลดล็อก HWID
                     st.write(f"**HWID ปัจจุบัน:** `{selected_item.get('hwid')}`")
-                    if st.button("🔓 ปลดล็อก HWID (เจาะจงคีย์นี้)", key=f"btn_hwid_{target_id}"):
-                        # 🟢 เจาะจงสั่งอัปเดตเฉพาะ id เดียวเท่านั้น
-                        supabase.table("licenses").update({"hwid": None, "is_used": False}).eq("id", target_id).execute()
-                        st.success(f"ปลดล็อก HWID เฉพาะคีย์ `{target_key}` เรียบร้อยแล้ว!")
+                    if st.button("🔓 ปลดล็อก HWID (ย้ายเครื่องให้ลูกค้า)"):
+                        supabase.table("licenses").update({"hwid": None, "is_used": False}).eq("id", selected_id).execute()
+                        st.success("ปลดล็อก HWID เรียบร้อยแล้ว! ลูกค้าสามารถนำคีย์ไปใส่เครื่องใหม่ได้ทันที")
                         st.rerun()
 
                     st.markdown("---")
                     # ปุ่มลบคีย์
-                    if st.button("❌ ลบ License Key นี้ออกจากระบบ", type="primary", key=f"btn_del_{target_id}"):
-                        supabase.table("licenses").delete().eq("id", target_id).execute()
-                        st.warning(f"ลบ License Key `{target_key}` เรียบร้อยแล้ว!")
+                    if st.button("❌ ลบ License Key นี้ออกจากระบบ", type="primary"):
+                        supabase.table("licenses").delete().eq("id", selected_id).execute()
+                        st.warning("ลบ License Key เรียบร้อยแล้ว!")
                         st.rerun()
 
         else:
