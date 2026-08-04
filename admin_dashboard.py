@@ -19,7 +19,7 @@ SUPABASE_KEY = "sb_publishable_GjArIEEPL9ZcIWuOl28J6Q_4QmIeWEk"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # 🔒 ระบบล็อกอินความปลอดภัยสำหรับ Admin
-ADMIN_PIN = "1234"  # 👈 เปลี่ยนรหัส PIN ตรงนี้ได้ตามต้องการ
+ADMIN_PIN = "7692"  # 👈 เปลี่ยนรหัส PIN ตรงนี้ได้ตามต้องการ
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
