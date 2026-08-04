@@ -63,6 +63,11 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         if data:
             df = pd.DataFrame(data)
 
+            # 🟢 แปลงเวลา UTC -> เวลาไทย
+            if "last_seen" in df.columns:
+                df["last_seen"] = pd.to_datetime(df["last_seen"])
+                df["last_seen"] = df["last_seen"].dt.tz_convert("Asia/Bangkok").dt.strftime("%Y-%m-%d %H:%M:%S")
+
             total_bots = len(df)
             active_bots = len(df[df["status"] == "RUNNING"])
             captcha_bots = len(df[df["current_step"].str.contains("CAPTCHA", na=False)])
