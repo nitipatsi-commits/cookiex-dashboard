@@ -181,7 +181,32 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                             st.rerun()
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาด: {ex}")
+                # 🚨 แถบแจ้งเตือนคีย์ที่กำลังจะหมดอายุใน 3 วัน
+    if keys_data:
+        today = datetime.now().date()
+        expiring_keys = []
 
+        for item in keys_data:
+            exp_str = item.get("expire_date", "")[:10]
+            try:
+                exp_dt = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                days_left = (exp_dt - today).days
+                # กรองเฉพาะคีย์ที่เหลืออายุ 0 ถึง 3 วัน และยังเปิดใช้งานอยู่
+                if 0 <= days_left <= 3 and item.get("is_active", True):
+                    expiring_keys.append({
+                        "License Key": item["license_key"],
+                        "วันหมดอายุ": exp_str,
+                        "คงเหลือ (วัน)": f"🔴 เหลือ {days_left} วัน" if days_left > 0 else "🚨 หมดอายุวันนี้!"
+                    })
+            except Exception:
+                pass
+
+        if expiring_keys:
+            st.warning("⚠️ **ตรวจพบ License Key ที่กำลังจะหมดอายุภายใน 3 วัน!**")
+            st.dataframe(pd.DataFrame(expiring_keys), use_container_width=True, hide_index=True)
+            st.divider()
+
+            
                 # --- ฝั่งขวา: สถานะ / ปลด HWID / ลบคีย์ ---
                 with col_b:
                     st.markdown("##### ⚙️ จัดการสถานะ & HWID")
