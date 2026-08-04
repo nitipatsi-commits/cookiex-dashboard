@@ -1,13 +1,15 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-import time
+from datetime import datetime, timedelta
+import uuid
 
-# 🟢 ตั้งค่าหน้าเว็บ
+# 🟢 ตั้งค่าหน้าเว็บให้รองรับมือถือและจอคอม
 st.set_page_config(
-    page_title="Cookie X - Admin Dashboard",
+    page_title="Cookie X - Admin System",
     page_icon="⚡",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # 🟢 เชื่อมต่อ Supabase
@@ -15,62 +17,189 @@ SUPABASE_URL = "https://dkgeqwmuvgjlaweamhsc.supabase.co"
 SUPABASE_KEY = "sb_publishable_GjArIEEPL9ZcIWuOl28J6Q_4QmIeWEk"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-st.title("⚡ Cookie X - Admin Control Dashboard")
-st.caption("มอนิเตอร์สถานะลูกค้าแบบ Real-time")
+# 🔒 ระบบล็อกอินความปลอดภัยสำหรับ Admin
+ADMIN_PIN = "1234"  # 👈 เปลี่ยนรหัส PIN ตรงนี้ได้ตามต้องการ
 
-# ปุ่มกดรีเฟรชข้อมูล
-if st.button("🔄 รีเฟรชข้อมูลสด"):
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    st.title("🔒 Admin Authentication")
+    st.caption("ระบบจัดการบอท Cookie X (กรุณากรอก PIN เพื่อเข้าใช้งาน)")
+    pin_input = st.text_input("กรอกรหัส Admin PIN:", type="password")
+    if st.button("เข้าสู่ระบบ"):
+        if pin_input == ADMIN_PIN:
+            st.session_state.authenticated = True
+            st.success("เข้าสู่ระบบสำเร็จ!")
+            st.rerun()
+        else:
+            st.error("รหัส PIN ไม่ถูกต้อง!")
+    st.stop()
+
+# ------------------- ส่วนเมนูเลือกใช้งาน -------------------
+st.sidebar.title("⚡ Cookie X Control")
+menu = st.sidebar.radio("เลือกเมนูใช้งาน", ["📊 Live Monitor (มอนิเตอร์บอท)", "🔑 Key Manager (จัดการคีย์)"])
+
+if st.sidebar.button("🚪 ออกจากระบบ"):
+    st.session_state.authenticated = False
     st.rerun()
 
-# 🟢 ดึงข้อมูลจากตาราง user_monitors
-try:
-    res = supabase.table("user_monitors").select("*").execute()
-    data = res.data
+# ---------------------------------------------------------
+# 📊 TAB 1: LIVE MONITOR (มอนิเตอร์สถานะบอทลูกค้า)
+# ---------------------------------------------------------
+if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
+    st.title("📊 Live Bot Monitor")
+    st.caption("มอนิเตอร์สถานะลูกค้าเรียลไทม์")
 
-    if data:
-        df = pd.DataFrame(data)
+    if st.button("🔄 รีเฟรชข้อมูลสด"):
+        st.rerun()
 
-        # 📊 1. การ์ดสรุปยอดรวม (KPI Cards)
-        total_bots = len(df)
-        active_bots = len(df[df["status"] == "RUNNING"])
-        captcha_bots = len(df[df["current_step"].str.contains("CAPTCHA", na=False)])
-        crashed_bots = len(df[df["status"] == "CRASH"])
-        total_boxes = df["boxes_collected"].sum() if "boxes_collected" in df.columns else 0
+    try:
+        res = supabase.table("user_monitors").select("*").execute()
+        data = res.data
 
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric("🤖 บอททั้งหมด", f"{total_bots} เครื่อง")
-        col2.metric("🟢 กำลังรันอยู่", f"{active_bots} เครื่อง")
-        col3.metric("🚨 ติด CAPTCHA", f"{captcha_bots} เครื่อง", delta_color="inverse")
-        col4.metric("💥 บอท Crash", f"{crashed_bots} เครื่อง", delta_color="inverse")
-        col5.metric("📦 ยอดกล่องสะสมรวม", f"{total_boxes:,} กล่อง")
+        if data:
+            df = pd.DataFrame(data)
 
-        st.divider()
+            total_bots = len(df)
+            active_bots = len(df[df["status"] == "RUNNING"])
+            captcha_bots = len(df[df["current_step"].str.contains("CAPTCHA", na=False)])
+            crashed_bots = len(df[df["status"] == "CRASH"])
+            total_boxes = df["boxes_collected"].sum() if "boxes_collected" in df.columns else 0
 
-        # 🚨 2. แจ้งเตือนฉุกเฉิน (แสดงเฉพาะเครื่องที่มีปัญหา)
-        problem_bots = df[(df["current_step"].str.contains("CAPTCHA", na=False)) | (df["status"] == "CRASH")]
-        if not problem_bots.empty:
-            st.error("⚠️ ตรวจพบเครื่องลูกค้าที่ต้องการการช่วยเหลือด่วน!")
-            st.dataframe(problem_bots[["license_key", "hwid", "status", "current_step", "last_seen"]], use_container_width=True)
+            # การ์ดสรุปยอด
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("🤖 บอททั้งหมด", f"{total_bots} เครื่อง")
+            c2.metric("🟢 กำลังรันอยู่", f"{active_bots} เครื่อง")
+            c3.metric("🚨 ติด CAPTCHA / Crash", f"{captcha_bots + crashed_bots} เครื่อง")
+            c4.metric("📦 ยอดกล่องสะสม", f"{total_boxes:,} กล่อง")
 
-        # 📋 3. ตารางแสดงสถานะเครื่องลูกค้าทุกคน
-        st.subheader("📋 รายชื่อและสถานะบอทของลูกค้าทั้งหมด")
-        
-        # เลือกแสดงเฉพาะคอลัมน์สำคัญ
-        show_cols = ["license_key", "status", "current_step", "farm_mode", "boxes_collected", "lives_collected", "cpu_usage", "ram_usage", "bot_version", "last_seen"]
-        existing_cols = [c for c in show_cols if c in df.columns]
-        
-        st.dataframe(
-            df[existing_cols],
-            use_container_width=True,
-            hide_index=True
-        )
+            st.divider()
 
-    else:
-        st.info("ยังไม่มีข้อมูลบอทออนไลน์ในระบบ")
+            # แสดงตาราง
+            show_cols = ["license_key", "status", "current_step", "farm_mode", "boxes_collected", "lives_collected", "cpu_usage", "ram_usage", "bot_version", "last_seen"]
+            existing_cols = [c for c in show_cols if c in df.columns]
+            st.dataframe(df[existing_cols], use_container_width=True, hide_index=True)
+        else:
+            st.info("ยังไม่มีข้อมูลมอนิเตอร์ในระบบ")
 
-except Exception as e:
+    except Exception as e:
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
 
-# อัปเดตหน้าจออัตโนมัติทุกๆ 10 วินาที
-time.sleep(10)
-st.rerun()
+# ---------------------------------------------------------
+# 🔑 TAB 2: KEY MANAGER (เพิ่ม / แก้ไข / ต่ออายุ / ปลด HWID)
+# ---------------------------------------------------------
+elif menu == "🔑 Key Manager (จัดการคีย์)":
+    st.title("🔑 License Key Manager")
+    st.caption("ระบบเพิ่ม เพิ่มเวลา ปรับสถานะ และจัดการคีย์ลูกค้า")
+
+    # --- Section 1: เพิ่มคีย์ใหม่ ---
+    with st.expander("➕ เพิ่มคีย์ใหม่ (Add New License)", expanded=False):
+        with st.form("add_key_form"):
+            new_key = st.text_input("License Key (หากเว้นว่างไว้จะสุ่มให้อัตโนมัติ):", value="")
+            days_valid = st.number_input("จำนวนวันที่ใช้งานได้ (วัน):", min_value=1, max_value=3650, value=30)
+            submitted = st.form_submit_button("➕ สร้างคีย์ใหม่")
+
+            if submitted:
+                final_key = new_key.strip() if new_key.strip() else str(uuid.uuid4())
+                exp_date = (datetime.now() + timedelta(days=days_valid)).strftime("%Y-%m-%d")
+                payload = {
+                    "license_key": final_key,
+                    "expire_date": exp_date,
+                    "is_active": True,
+                    "is_used": False,
+                    "hwid": None
+                }
+                try:
+                    supabase.table("licenses").insert(payload).execute()
+                    st.success(f"สร้างคีย์สำเร็จ! Key: `{final_key}` (หมดอายุ: {exp_date})")
+                except Exception as ex:
+                    st.error(f"สร้างคีย์ไม่สำเร็จ: {ex}")
+
+    st.divider()
+
+    # --- Section 2: รายการคีย์ทั้งหมดและการจัดการ ---
+    st.subheader("📋 รายการ License Keys ในระบบ")
+    
+    try:
+        res_keys = supabase.table("licenses").select("*").execute()
+        keys_data = res_keys.data
+
+        if keys_data:
+            df_keys = pd.DataFrame(keys_data)
+            
+            # โชว์ตารางคีย์ทั้งหมด
+            st.dataframe(
+                df_keys[["id", "license_key", "expire_date", "is_active", "is_used", "hwid"]],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.divider()
+            st.subheader("🛠️ เครื่องมือจัดการคีย์")
+
+            # เลือกคีย์ที่จะจัดการ
+            key_list = [f"{item['license_key']} (ID: {item['id']})" for item in keys_data]
+            selected_option = st.selectbox("เลือก License Key ที่ต้องการจัดการ:", key_list)
+
+            if selected_option:
+                selected_id = int(selected_option.split("ID: ")[1].replace(")", ""))
+                selected_item = next(item for item in keys_data if item["id"] == selected_id)
+
+                col_a, col_b = st.columns(2)
+
+                # --- ฝั่งซ้าย: ต่ออายุ / แก้ไขวันหมดอายุ ---
+                with col_a:
+                    st.markdown("##### 📅 ต่ออายุ / ปรับวันหมดอายุ")
+                    current_exp_str = selected_item.get("expire_date", "")[:10]
+                    try:
+                        current_exp_dt = datetime.strptime(current_exp_str, "%Y-%m-%d").date()
+                    except:
+                        current_exp_dt = datetime.now().date()
+
+                    new_exp_date = st.date_input("เลือกวันหมดอายุใหม่:", value=current_exp_dt)
+                    add_days = st.number_input("หรือกดบวกเพิ่มจำนวนวัน (+วัน):", min_value=0, max_value=365, value=0)
+
+                    if st.button("💾 บันทึกการเปลี่ยนวันหมดอายุ"):
+                        final_exp_dt = new_exp_date + timedelta(days=add_days)
+                        try:
+                            supabase.table("licenses").update({
+                                "expire_date": final_exp_dt.strftime("%Y-%m-%d")
+                            }).eq("id", selected_id).execute()
+                            st.success(f"อัปเดตวันหมดอายุสำเร็จเป็น: {final_exp_dt}")
+                            st.rerun()
+                        except Exception as ex:
+                            st.error(f"เกิดข้อผิดพลาด: {ex}")
+
+                # --- ฝั่งขวา: สถานะ / ปลด HWID / ลบคีย์ ---
+                with col_b:
+                    st.markdown("##### ⚙️ จัดการสถานะ & HWID")
+                    current_active = selected_item.get("is_active", True)
+                    
+                    # สวิตช์ เปิด/ปิด คีย์
+                    new_active = st.checkbox("สถานะเปิดใช้งาน (is_active)", value=current_active)
+                    if new_active != current_active:
+                        if st.button("🔄 อัปเดตสถานะการใช้งาน"):
+                            supabase.table("licenses").update({"is_active": new_active}).eq("id", selected_id).execute()
+                            st.success("อัปเดตสถานะสำเร็จ!")
+                            st.rerun()
+
+                    # ปุ่มปลดล็อก HWID
+                    st.write(f"**HWID ปัจจุบัน:** `{selected_item.get('hwid')}`")
+                    if st.button("🔓 ปลดล็อก HWID (ย้ายเครื่องให้ลูกค้า)"):
+                        supabase.table("licenses").update({"hwid": None, "is_used": False}).eq("id", selected_id).execute()
+                        st.success("ปลดล็อก HWID เรียบร้อยแล้ว! ลูกค้าสามารถนำคีย์ไปใส่เครื่องใหม่ได้ทันที")
+                        st.rerun()
+
+                    st.markdown("---")
+                    # ปุ่มลบคีย์
+                    if st.button("❌ ลบ License Key นี้ออกจากระบบ", type="primary"):
+                        supabase.table("licenses").delete().eq("id", selected_id).execute()
+                        st.warning("ลบ License Key เรียบร้อยแล้ว!")
+                        st.rerun()
+
+        else:
+            st.info("ยังไม่มีข้อมูลคีย์ในฐานข้อมูล")
+
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลคีย์: {e}")
