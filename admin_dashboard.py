@@ -107,7 +107,7 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
                             supabase.table("user_monitors").update({
                                 "action_command": "screenshot"
                             }).eq("license_key", selected_bot_key).execute()
-                            st.success(f"ส่งคำสั่งแคปหน้าจอไปที่ `{selected_bot_key}` แล้ว! รูปจะส่งเข้า Discord ภายใน 15 วินาที")
+                            st.success(f"ส่งคำสั่งแคปหน้าจอไปที่ `{selected_bot_key}` แล้ว! รูปจะส่งเข้า Discord ภายใน 1 วินาที")
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาดในการส่งคำสั่ง: {ex}")
             else:
