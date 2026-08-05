@@ -237,5 +237,27 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         else:
             st.info("ยังไม่มีข้อมูลคีย์ในฐานข้อมูล")
 
+        with st.expander("🚀 ปล่อยอัปเดตเวอร์ชันบอทใหม่ (Release Update)", expanded=False):
+            with st.form("release_update_form"):
+                ver_code = st.text_input("เลขเวอร์ชันใหม่ (เช่น 1.7.0):", value="1.7.0")
+                dl_url = st.text_input("Direct Link ดาวน์โหลดไฟล์ .exe เวอร์ชันใหม่:", value="")
+                change_log = st.text_area("รายละเอียดการอัปเดต (Changelog):", value="• ปรับปรุงประสิทธิภาพและแก้บั๊ก")
+                submit_rel = st.form_submit_button("🚀 ส่งอัปเดตไปยังเครื่องลูกค้าทั้งหมด")
+
+                if submit_rel:
+                    if not dl_url.strip():
+                        st.error("กรุณากรอก Direct Link สำหรับดาวน์โหลดไฟล์ .exe")
+                    else:
+                        payload = {
+                            "version_code": ver_code.strip(),
+                            "download_url": dl_url.strip(),
+                            "changelog": change_log.strip()
+                        }
+                        try:
+                            supabase.table("app_versions").insert(payload).execute()
+                            st.success(f"🎉 ปล่อยอัปเดตเวอร์ชัน {ver_code} เรียบร้อยแล้ว! ลูกค้าที่เปิดบอทขึ้นมาจะเด้งป๊อปอัปให้อัปเดตทันที")
+                        except Exception as ex:
+                            st.error(f"เกิดข้อผิดพลาดในการปล่อยอัปเดต: {ex}")
+
     except Exception as e:
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลคีย์: {e}")
