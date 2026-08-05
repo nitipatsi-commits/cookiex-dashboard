@@ -86,6 +86,33 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
             show_cols = ["license_key", "status", "current_step", "farm_mode", "boxes_collected", "lives_collected", "cpu_usage", "ram_usage", "bot_version", "last_seen"]
             existing_cols = [c for c in show_cols if c in df.columns]
             st.dataframe(df[existing_cols], use_container_width=True, hide_index=True)
+
+            
+        # 🟢 [เพิ่มใหม่] โซนสั่งแคปหน้าจอสดผ่านมือถือ
+            st.divider()
+            st.subheader("📸 สั่งแคปหน้าจอบอทรอบสด (Remote Screenshot)")
+            
+            # ดึงรายชื่อ License Key ทั้งหมดในระบบ
+            bot_keys = df["license_key"].tolist()
+            if bot_keys:
+                col_ss1, col_ss2 = st.columns([3, 2])
+                with col_ss1:
+                    selected_bot_key = st.selectbox("เลือกบอทเครื่องที่ต้องการดูหน้าจอ:", bot_keys, key="ss_select_key")
+                with col_ss2:
+                    st.write("") # ดันเว้นระยะบรรทัดให้ปุ่มตรงกับช่อง selectbox
+                    st.write("")
+                    if st.button("📷 สั่งแคปหน้าจอส่งเข้า Discord", key="btn_send_ss"):
+                        try:
+                            # ส่งคำสั่ง 'screenshot' ไปยังคอลัมน์ action_command ใน Supabase
+                            supabase.table("user_monitors").update({
+                                "action_command": "screenshot"
+                            }).eq("license_key", selected_bot_key).execute()
+                            st.success(f"ส่งคำสั่งแคปหน้าจอไปที่ `{selected_bot_key}` แล้ว! รูปจะส่งเข้า Discord ภายใน 15 วินาที")
+                        except Exception as ex:
+                            st.error(f"เกิดข้อผิดพลาดในการส่งคำสั่ง: {ex}")
+            else:
+                st.caption("ยังไม่มีเครื่องบอทเชื่อมต่อเข้ามาในระบบ")
+
         else:
             st.info("ยังไม่มีข้อมูลมอนิเตอร์ในระบบ")
 
@@ -259,5 +286,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาดในการปล่อยอัปเดต: {ex}")
 
+        
     except Exception as e:
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลคีย์: {e}")
