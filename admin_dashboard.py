@@ -87,8 +87,7 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
             existing_cols = [c for c in show_cols if c in df.columns]
             st.dataframe(df[existing_cols], use_container_width=True, hide_index=True)
 
-            
-        # 🟢 [เพิ่มใหม่] โซนสั่งแคปหน้าจอสดผ่านมือถือ
+            # 🟢 โซนสั่งแคปหน้าจอสดผ่านมือถือ
             st.divider()
             st.subheader("📸 สั่งแคปหน้าจอบอทรอบสด (Remote Screenshot)")
             
@@ -99,11 +98,10 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
                 with col_ss1:
                     selected_bot_key = st.selectbox("เลือกบอทเครื่องที่ต้องการดูหน้าจอ:", bot_keys, key="ss_select_key")
                 with col_ss2:
-                    st.write("") # ดันเว้นระยะบรรทัดให้ปุ่มตรงกับช่อง selectbox
+                    st.write("") 
                     st.write("")
                     if st.button("📷 สั่งแคปหน้าจอส่งเข้า Discord", key="btn_send_ss"):
                         try:
-                            # ส่งคำสั่ง 'screenshot' ไปยังคอลัมน์ action_command ใน Supabase
                             supabase.table("user_monitors").update({
                                 "action_command": "screenshot"
                             }).eq("license_key", selected_bot_key).execute()
@@ -120,16 +118,17 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
 
 # ---------------------------------------------------------
-# 🔑 TAB 2: KEY MANAGER (เพิ่ม / แก้ไข / ต่ออายุ / ปลด HWID)
+# 🔑 TAB 2: KEY MANAGER (เพิ่ม / แก้ไข / ต่ออายุ / ปรับสิทธิ์ Premier / ปลด HWID)
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
-    st.caption("ระบบเพิ่ม เพิ่มเวลา ปรับสถานะ และจัดการคีย์ลูกค้า")
+    st.caption("ระบบเพิ่ม เพิ่มเวลา ปรับยศสิทธิ์ (Normal/Premier) และจัดการคีย์ลูกค้า")
 
     # --- Section 1: เพิ่มคีย์ใหม่ ---
     with st.expander("➕ เพิ่มคีย์ใหม่ (Add New License)", expanded=False):
         with st.form("add_key_form"):
             new_key = st.text_input("License Key (หากเว้นว่างไว้จะสุ่มให้อัตโนมัติ 10 หลัก):", value="")
+            key_type_choice = st.selectbox("ประเภทสิทธิ์ใช้งาน (Key Type):", ["normal", "premier"], format_func=lambda x: "👑 Premier (พรีเมียม)" if x == "premier" else "👤 Normal (ปกติ)")
             days_valid = st.number_input("จำนวนวันที่ใช้งานได้ (วัน):", min_value=1, max_value=3650, value=30)
             submitted = st.form_submit_button("➕ สร้างคีย์ใหม่")
 
@@ -145,11 +144,12 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     "expire_date": exp_date,
                     "is_active": True,
                     "is_used": False,
-                    "hwid": None
+                    "hwid": None,
+                    "key_type": key_type_choice  # 🟢 เพิ่มการบันทึกประเภทคีย์
                 }
                 try:
                     supabase.table("licenses").insert(payload).execute()
-                    st.success(f"สร้างคีย์สำเร็จ! Key: `{final_key}` (หมดอายุ: {exp_date})")
+                    st.success(f"สร้างคีย์สำเร็จ! Key: `{final_key}` | สิทธิ์: **{key_type_choice.upper()}** (หมดอายุ: {exp_date})")
                 except Exception as ex:
                     st.error(f"สร้างคีย์ไม่สำเร็จ: {ex}")
 
@@ -175,6 +175,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     if 0 <= days_left <= 3 and item.get("is_active", True):
                         expiring_keys.append({
                             "License Key": item["license_key"],
+                            "สิทธิ์": "👑 PREMIER" if item.get("key_type") == "premier" else "👤 NORMAL",
                             "วันหมดอายุ": exp_str,
                             "คงเหลือ": f"🔴 เหลือ {days_left} วัน" if days_left > 0 else "🚨 หมดอายุวันนี้!"
                         })
@@ -189,9 +190,15 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
             df_keys = pd.DataFrame(keys_data)
             
-            # โชว์ตารางคีย์ทั้งหมด
+            # 🟢 ปรับแต่งการแสดงผลคอลัมน์ในตาราง
+            if "key_type" not in df_keys.columns:
+                df_keys["key_type"] = "normal"
+            
+            show_key_cols = ["id", "license_key", "key_type", "expire_date", "is_active", "is_used", "hwid"]
+            existing_key_cols = [c for c in show_key_cols if c in df_keys.columns]
+            
             st.dataframe(
-                df_keys[["id", "license_key", "expire_date", "is_active", "is_used", "hwid"]],
+                df_keys[existing_key_cols],
                 use_container_width=True,
                 hide_index=True
             )
@@ -200,7 +207,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             st.subheader("🛠️ เครื่องมือจัดการคีย์")
 
             # เลือกคีย์ที่จะจัดการ
-            key_list = [f"{item['license_key']} (ID: {item['id']})" for item in keys_data]
+            key_list = [f"{item['license_key']} [{str(item.get('key_type', 'normal')).upper()}] (ID: {item['id']})" for item in keys_data]
             selected_option = st.selectbox("เลือก License Key ที่ต้องการจัดการ:", key_list)
 
             if selected_option:
@@ -232,14 +239,37 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาด: {ex}")
 
-                # --- ฝั่งขวา: สถานะ / ปลด HWID / ลบคีย์ ---
+                # --- ฝั่งขวา: ปรับยศ Premier / สถานะ / ปลด HWID / ลบคีย์ ---
                 with col_b:
-                    st.markdown("##### ⚙️ จัดการสถานะ & HWID")
+                    st.markdown("##### ⚙️ จัดการสิทธิ์, สถานะ & HWID")
                     target_id = selected_item["id"]
                     target_key = selected_item["license_key"]
                     current_active = selected_item.get("is_active", True)
-                    
-                    # สวิตช์ เปิด/ปิด คีย์
+                    current_type = str(selected_item.get("key_type", "normal")).lower()
+
+                    # 🟢 1. Dropdown เลือกปรับยศ Normal / Premier
+                    type_options = ["normal", "premier"]
+                    type_index = 1 if current_type == "premier" else 0
+                    new_key_type = st.selectbox(
+                        "ประเภทสิทธิ์การใช้งาน (key_type):", 
+                        type_options, 
+                        index=type_index, 
+                        format_func=lambda x: "👑 Premier (พรีเมียม)" if x == "premier" else "👤 Normal (ปกติ)",
+                        key=f"type_select_{target_id}"
+                    )
+
+                    if new_key_type != current_type:
+                        if st.button("👑 อัปเดตประเภทสิทธิ์", key=f"btn_type_{target_id}"):
+                            try:
+                                supabase.table("licenses").update({"key_type": new_key_type}).eq("id", target_id).execute()
+                                st.success(f"เปลี่ยนสิทธิ์คีย์ {target_key} เป็น [{new_key_type.upper()}] สำเร็จ!")
+                                st.rerun()
+                            except Exception as ex:
+                                st.error(f"เกิดข้อผิดพลาดในการเปลี่ยนสิทธิ์: {ex}")
+
+                    st.markdown("---")
+
+                    # 2. สวิตช์ เปิด/ปิด คีย์
                     new_active = st.checkbox("สถานะเปิดใช้งาน (is_active)", value=current_active, key=f"active_{target_id}")
                     if new_active != current_active:
                         if st.button("🔄 อัปเดตสถานะการใช้งาน", key=f"btn_act_{target_id}"):
@@ -247,7 +277,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                             st.success(f"อัปเดตสถานะคีย์ {target_key} สำเร็จ!")
                             st.rerun()
 
-                    # ปุ่มปลดล็อก HWID
+                    # 3. ปุ่มปลดล็อก HWID
                     st.write(f"**HWID ปัจจุบัน:** `{selected_item.get('hwid')}`")
                     if st.button("🔓 ปลดล็อก HWID (เจาะจงคีย์นี้)", key=f"btn_hwid_{target_id}"):
                         supabase.table("licenses").update({"hwid": None, "is_used": False}).eq("id", target_id).execute()
@@ -255,7 +285,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         st.rerun()
 
                     st.markdown("---")
-                    # ปุ่มลบคีย์
+                    # 4. ปุ่มลบคีย์
                     if st.button("❌ ลบ License Key นี้ออกจากระบบ", type="primary", key=f"btn_del_{target_id}"):
                         supabase.table("licenses").delete().eq("id", target_id).execute()
                         st.warning(f"ลบ License Key `{target_key}` เรียบร้อยแล้ว!")
@@ -286,6 +316,5 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาดในการปล่อยอัปเดต: {ex}")
 
-        
     except Exception as e:
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลคีย์: {e}")
