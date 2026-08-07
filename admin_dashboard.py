@@ -26,11 +26,9 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # 🔒 Discord Webhook ฝั่ง Admin (ปลอดภัย 100% ลูกค้ามองไม่เห็น)
 ADMIN_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1534196144307966074/HUMcKoACWdddQqGoCRScYZFgS_jplvkJjOs-qp2-KGrX7vOVZGz_hTOnwzGNAUuM7gZk"
 
-# 🟢 [Server Relay Worker] สแกนหาภาพ/ข้อความจากลูกค้าใน Supabase แล้วยิงเข้า Discord แทน
 def discord_relay_worker():
     while True:
         try:
-            # ดึงรายการที่มีข้อความค้าง
             res = supabase.table("user_monitors").select("*").not_.is_("pending_alert_msg", "null").execute()
             rows = res.data
 
@@ -41,18 +39,22 @@ def discord_relay_worker():
                     row_key = row.get("license_key") or row.get("hwid") or "Unknown"
                     row_id = row.get("id")
 
-                    # 🚨 1. เคลียร์ค่าใน Supabase ออกก่อนทันที! ป้องกันลูปค้างหากยิง Discord ล้มเหลว
+                    # 🚨 1. ล้างค่าในฐานข้อมูลทิ้งทันทีเป็นอันดับแรก!
                     supabase.table("user_monitors").update({
                         "pending_alert_msg": None,
                         "pending_alert_img": None
                     }).eq("id", row_id).execute()
 
-                    # 2. ถ้าระบบมี Webhook ค่อยยิงเข้า Discord
-                    if msg and ADMIN_DISCORD_WEBHOOK:
+                    # 🚨 2. ถ้าระบบส่งข้อความมาเป็นคำว่า [NULL] หรือ None ให้ข้าม ไม่ต้องยิงเข้า Discord
+                    if not msg or str(msg).strip() in ["[NULL]", "None", "null", ""]:
+                        continue
+
+                    # 3. ยิงเข้า Discord หากมีข้อความจริง
+                    if ADMIN_DISCORD_WEBHOOK:
                         payload_data = {"content": f"🤖 **[Bot: {row_key}]**\n{msg}"}
                         files = None
 
-                        if b64_img:
+                        if b64_img and len(str(b64_img)) > 20: # เช็คว่ามีรูปจริง ไม่ใช่ไฟล์เสีย 3 bytes
                             try:
                                 img_bytes = base64.b64decode(b64_img)
                                 files = {'file': ('screenshot.png', img_bytes, 'image/png')}
@@ -62,7 +64,7 @@ def discord_relay_worker():
                         requests.post(ADMIN_DISCORD_WEBHOOK, data=payload_data, files=files)
 
         except Exception as e:
-            print(f"Relay Error: {e}")
+            pass
 
         time.sleep(3)
 
