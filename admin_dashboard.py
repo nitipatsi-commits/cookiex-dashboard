@@ -94,7 +94,7 @@ if not st.session_state.authenticated:
 
 # ------------------- ส่วนเมนูเลือกใช้งาน -------------------
 st.sidebar.title("⚡ Cookie X Control")
-menu = st.sidebar.radio("เลือกเมนูใช้งาน", ["📊 Live Monitor (มอนิเตอร์บอท)", "🔑 Key Manager (จัดการคีย์)"])
+menu = st.sidebar.radio("เลือกเมนูใช้งาน", ["📊 Live Monitor (มอนิเตอร์บอท)", "🔑 Key Manager (จัดการคีย์)", "💻 Active Sessions (เซสชันจอสด)"])
 
 if st.sidebar.button("🚪 ออกจากระบบ"):
     st.session_state.authenticated = False
@@ -175,11 +175,11 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
 
 # ---------------------------------------------------------
-# 🔑 TAB 2: KEY MANAGER (เพิ่ม / แก้ไข / ต่ออายุ / ปรับสิทธิ์ Premier / ปลด HWID)
+# 🔑 TAB 2: KEY MANAGER (เพิ่ม / แก้ไข / ต่ออายุ / ปรับสิทธิ์ Premier / ปรับ max_sessions)
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
-    st.caption("ระบบเพิ่ม เพิ่มเวลา ปรับยศสิทธิ์ (Normal/Premier) และจัดการคีย์ลูกค้า")
+    st.caption("ระบบเพิ่ม เพิ่มเวลา ปรับยศสิทธิ์ (Normal/Premier) กำหนดจำนวนโควตาจอ และจัดการคีย์ลูกค้า")
 
     # --- Section 1: เพิ่มคีย์ใหม่ ---
     with st.expander("➕ เพิ่มคีย์ใหม่ (Add New License)", expanded=False):
@@ -187,6 +187,10 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             new_key = st.text_input("License Key (หากเว้นว่างไว้จะสุ่มให้อัตโนมัติ 10 หลัก):", value="")
             key_type_choice = st.selectbox("ประเภทสิทธิ์ใช้งาน (Key Type):", ["normal", "premier"], format_func=lambda x: "👑 Premier (พรีเมียม)" if x == "premier" else "👤 Normal (ปกติ)")
             days_valid = st.number_input("จำนวนวันที่ใช้งานได้ (วัน):", min_value=1, max_value=3650, value=30)
+            
+            # 🟢 [เพิ่มใหม่] กำหนดจำนวนจอสูงสุดที่อนุญาตให้เปิดพร้อมกัน
+            max_sessions_input = st.number_input("จำนวนจอสูงสุดที่เปิดได้พร้อมกัน (max_sessions):", min_value=1, max_value=100, value=1)
+            
             submitted = st.form_submit_button("➕ สร้างคีย์ใหม่")
 
             if submitted:
@@ -202,11 +206,12 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     "is_active": True,
                     "is_used": False,
                     "hwid": None,
-                    "key_type": key_type_choice
+                    "key_type": key_type_choice,
+                    "max_sessions": max_sessions_input  # 🟢 แนบค่าโควตาจอลงฐานข้อมูล
                 }
                 try:
                     supabase.table("licenses").insert(payload).execute()
-                    st.success(f"สร้างคีย์สำเร็จ! Key: `{final_key}` | สิทธิ์: **{key_type_choice.upper()}** (หมดอายุ: {exp_date})")
+                    st.success(f"สร้างคีย์สำเร็จ! Key: `{final_key}` | สิทธิ์: **{key_type_choice.upper()}** | โควตา: **{max_sessions_input} จอ** (หมดอายุ: {exp_date})")
                 except Exception as ex:
                     st.error(f"สร้างคีย์ไม่สำเร็จ: {ex}")
 
@@ -233,6 +238,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         expiring_keys.append({
                             "License Key": item["license_key"],
                             "สิทธิ์": "👑 PREMIER" if item.get("key_type") == "premier" else "👤 NORMAL",
+                            "โควตาจอ": f"{item.get('max_sessions', 1)} จอ",
                             "วันหมดอายุ": exp_str,
                             "คงเหลือ": f"🔴 เหลือ {days_left} วัน" if days_left > 0 else "🚨 หมดอายุวันนี้!"
                         })
@@ -249,8 +255,11 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             
             if "key_type" not in df_keys.columns:
                 df_keys["key_type"] = "normal"
+            if "max_sessions" not in df_keys.columns:
+                df_keys["max_sessions"] = 1
             
-            show_key_cols = ["id", "license_key", "key_type", "expire_date", "is_active", "is_used", "hwid"]
+            # 🟢 แสดงคอลัมน์ max_sessions บนตารางรายการคีย์
+            show_key_cols = ["id", "license_key", "key_type", "max_sessions", "expire_date", "is_active", "is_used", "hwid"]
             existing_key_cols = [c for c in show_key_cols if c in df_keys.columns]
             
             st.dataframe(
@@ -263,7 +272,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             st.subheader("🛠️ เครื่องมือจัดการคีย์")
 
             # เลือกคีย์ที่จะจัดการ
-            key_list = [f"{item['license_key']} [{str(item.get('key_type', 'normal')).upper()}] (ID: {item['id']})" for item in keys_data]
+            key_list = [f"{item['license_key']} [{str(item.get('key_type', 'normal')).upper()}] - {item.get('max_sessions', 1)} จอ (ID: {item['id']})" for item in keys_data]
             selected_option = st.selectbox("เลือก License Key ที่ต้องการจัดการ:", key_list)
 
             if selected_option:
@@ -295,13 +304,14 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาด: {ex}")
 
-                # --- ฝั่งขวา: ปรับยศ Premier / สถานะ / ปลด HWID / ลบคีย์ ---
+                # --- ฝั่งขวา: ปรับยศ Premier / โควตาจอ / สถานะ / ปลด HWID & Sessions ---
                 with col_b:
-                    st.markdown("##### ⚙️ จัดการสิทธิ์, สถานะ & HWID")
+                    st.markdown("##### ⚙️ จัดการสิทธิ์, โควตาจอ, สถานะ & HWID")
                     target_id = selected_item["id"]
                     target_key = selected_item["license_key"]
                     current_active = selected_item.get("is_active", True)
                     current_type = str(selected_item.get("key_type", "normal")).lower()
+                    current_max_sessions = int(selected_item.get("max_sessions", 1))
 
                     # 🟢 1. Dropdown เลือกปรับยศ Normal / Premier
                     type_options = ["normal", "premier"]
@@ -325,7 +335,27 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                     st.markdown("---")
 
-                    # 2. สวิตช์ เปิด/ปิด คีย์
+                    # 🟢 2. ปรับโควตาจำนวนจอสูงสุด (max_sessions)
+                    new_max_sessions = st.number_input(
+                        "โควตาจำนวนจอสูงสุด (max_sessions):", 
+                        min_value=1, 
+                        max_value=100, 
+                        value=current_max_sessions,
+                        key=f"max_sess_{target_id}"
+                    )
+
+                    if new_max_sessions != current_max_sessions:
+                        if st.button("📱 อัปเดตโควตาจำนวนจอ", key=f"btn_sess_{target_id}"):
+                            try:
+                                supabase.table("licenses").update({"max_sessions": new_max_sessions}).eq("id", target_id).execute()
+                                st.success(f"อัปเดตโควตาคีย์ `{target_key}` เป็น {new_max_sessions} จอ เรียบร้อยแล้ว!")
+                                st.rerun()
+                            except Exception as ex:
+                                st.error(f"เกิดข้อผิดพลาดในการเปลี่ยนโควตาจอ: {ex}")
+
+                    st.markdown("---")
+
+                    # 3. สวิตช์ เปิด/ปิด คีย์
                     new_active = st.checkbox("สถานะเปิดใช้งาน (is_active)", value=current_active, key=f"active_{target_id}")
                     if new_active != current_active:
                         if st.button("🔄 อัปเดตสถานะการใช้งาน", key=f"btn_act_{target_id}"):
@@ -333,17 +363,31 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                             st.success(f"อัปเดตสถานะคีย์ {target_key} สำเร็จ!")
                             st.rerun()
 
-                    # 3. ปุ่มปลดล็อก HWID
+                    # 4. ปุ่มปลดล็อก HWID & เคลียร์เซสชันค้าง
                     st.write(f"**HWID ปัจจุบัน:** `{selected_item.get('hwid')}`")
-                    if st.button("🔓 ปลดล็อก HWID (เจาะจงคีย์นี้)", key=f"btn_hwid_{target_id}"):
-                        supabase.table("licenses").update({"hwid": None, "is_used": False}).eq("id", target_id).execute()
-                        st.success(f"ปลดล็อก HWID เฉพาะคีย์ `{target_key}` เรียบร้อยแล้ว!")
-                        st.rerun()
+                    
+                    c_hwid1, c_hwid2 = st.columns(2)
+                    with c_hwid1:
+                        if st.button("🔓 ปลดล็อก HWID", key=f"btn_hwid_{target_id}"):
+                            supabase.table("licenses").update({"hwid": None, "is_used": False}).eq("id", target_id).execute()
+                            st.success(f"ปลดล็อก HWID คีย์ `{target_key}` เรียบร้อย!")
+                            st.rerun()
+                    with c_hwid2:
+                        # 🟢 [เพิ่มใหม่] ปุ่มสั่งเคลียร์เซสชันที่ค้างทั้งหมดของคีย์นี้
+                        if st.button("🧹 เคลียร์เซสชันค้าง", key=f"btn_clear_sess_{target_id}"):
+                            try:
+                                supabase.table("active_sessions").delete().eq("license_key", target_key).execute()
+                                st.success(f"เคลียร์เซสชันค้างของคีย์ `{target_key}` เรียบร้อย!")
+                                st.rerun()
+                            except Exception as ex:
+                                st.error(f"เคลียร์เซสชันไม่สำเร็จ: {ex}")
 
                     st.markdown("---")
-                    # 4. ปุ่มลบคีย์
+                    # 5. ปุ่มลบคีย์
                     if st.button("❌ ลบ License Key นี้ออกจากระบบ", type="primary", key=f"btn_del_{target_id}"):
                         supabase.table("licenses").delete().eq("id", target_id).execute()
+                        # ลบเซสชันค้างของคีย์นี้ออกด้วย
+                        supabase.table("active_sessions").delete().eq("license_key", target_key).execute()
                         st.warning(f"ลบ License Key `{target_key}` เรียบร้อยแล้ว!")
                         st.rerun()
 
@@ -374,3 +418,59 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
     except Exception as e:
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลคีย์: {e}")
+
+# ---------------------------------------------------------
+# 💻 TAB 3: ACTIVE SESSIONS (ดูและเคลียร์เซสชันสดรายจอ)
+# ---------------------------------------------------------
+elif menu == "💻 Active Sessions (เซสชันจอสด)":
+    st.title("💻 Active Sessions Control")
+    st.caption("ตรวจสอบและจัดการเซสชันจอที่กำลังเปิดรันอยู่สดๆ ทั้งหมด")
+
+    if st.button("🔄 รีเฟรชรายการเซสชัน"):
+        st.rerun()
+
+    try:
+        res_sess = supabase.table("active_sessions").select("*").execute()
+        sess_data = res_sess.data
+
+        if sess_data:
+            df_sess = pd.DataFrame(sess_data)
+            
+            # แปลงเวลา UTC -> เวลาไทย
+            if "last_heartbeat" in df_sess.columns:
+                df_sess["last_heartbeat"] = pd.to_datetime(df_sess["last_heartbeat"])
+                df_sess["last_heartbeat"] = df_sess["last_heartbeat"].dt.tz_convert("Asia/Bangkok").dt.strftime("%Y-%m-%d %H:%M:%S")
+
+            st.write(f"📊 **จำนวนจอที่เปิดใช้งานอยู่ขณะนี้:** `{len(df_sess)} จอ`")
+            
+            show_sess_cols = ["id", "license_key", "session_id", "hwid", "last_heartbeat"]
+            existing_sess_cols = [c for c in show_sess_cols if c in df_sess.columns]
+            st.dataframe(df_sess[existing_sess_cols], use_container_width=True, hide_index=True)
+
+            st.divider()
+            col_act1, col_act2 = st.columns(2)
+
+            with col_act1:
+                st.markdown("##### 🎯 สั่งเตะเซสชันเฉพาะจอ")
+                sess_options = [f"ID: {r['id']} | Key: {r['license_key']} | HWID: {r['hwid']}" for r in sess_data]
+                sel_sess = st.selectbox("เลือกเซสชันที่ต้องการสั่งเตะออก:", sess_options)
+                
+                if st.button("❌ เตะเซสชันนี้ออก"):
+                    target_sess_id = int(sel_sess.split("ID: ")[1].split(" |")[0])
+                    supabase.table("active_sessions").delete().eq("id", target_sess_id).execute()
+                    st.success("สั่งเตะเซสชันดังกล่าวเรียบร้อยแล้ว!")
+                    st.rerun()
+
+            with col_act2:
+                st.markdown("##### 🧹 ล้างเซสชันทั้งหมด")
+                st.caption("สั่งลบเซสชันจอทั้งหมดในระบบ (ใช้เมื่อต้องการรีเซ็ตใหม่ทั้งหมด)")
+                if st.button("🔥 ล้างเซสชันค้างทั้งหมดในระบบ", type="primary"):
+                    supabase.table("active_sessions").delete().neq("id", 0).execute()
+                    st.warning("ล้างเซสชันทั้งหมดเรียบร้อยแล้ว!")
+                    st.rerun()
+
+        else:
+            st.info("ขณะนี้ไม่มีเซสชันจอเปิดรันอยู่ในระบบ")
+
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล active_sessions: {e}")
