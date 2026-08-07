@@ -385,10 +385,12 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     st.markdown("---")
                     # 5. ปุ่มลบคีย์
                     if st.button("❌ ลบ License Key นี้ออกจากระบบ", type="primary", key=f"btn_del_{target_id}"):
+                        # 🟢 ลบข้อมูลคีย์หลัก
                         supabase.table("licenses").delete().eq("id", target_id).execute()
-                        # ลบเซสชันค้างของคีย์นี้ออกด้วย
+                        # 🟢 ลบเซสชันสดที่ค้างอยู่ของคีย์นี้ทิ้งด้วย
                         supabase.table("active_sessions").delete().eq("license_key", target_key).execute()
-                        st.warning(f"ลบ License Key `{target_key}` เรียบร้อยแล้ว!")
+    
+                        st.warning(f"ลบ License Key `{target_key}` และเซสชันทั้งหมดเรียบร้อยแล้ว!")
                         st.rerun()
 
         else:
