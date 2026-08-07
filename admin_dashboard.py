@@ -1,9 +1,14 @@
+import base64
 import random
 import string
-import streamlit as st
-import pandas as pd
-from supabase import create_client
+import threading
+import time
 from datetime import datetime, timedelta
+
+import pandas as pd
+import requests
+import streamlit as st
+from supabase import create_client
 
 # 🟢 ตั้งค่าหน้าเว็บให้รองรับมือถือและจอคอม
 st.set_page_config(
@@ -18,8 +23,56 @@ SUPABASE_URL = "https://dkgeqwmuvgjlaweamhsc.supabase.co"
 SUPABASE_KEY = "sb_publishable_GjArIEEPL9ZcIWuOl28J6Q_4QmIeWEk"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# 🔒 Discord Webhook ฝั่ง Admin (ปลอดภัย 100% ลูกค้ามองไม่เห็น)
+ADMIN_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1534196144307966074/HUMcKoACWdddQqGoCRScYZFgS_jplvkJjOs-qp2-KGrX7vOVZGz_hTOnwzGNAUuM7gZk"
+
+# 🟢 [Server Relay Worker] สแกนหาภาพ/ข้อความจากลูกค้าใน Supabase แล้วยิงเข้า Discord แทน
+def discord_relay_worker():
+    while True:
+        try:
+            # ดึงรายการที่มีข้อความ/ภาพแจ้งเตือนตกค้าง
+            res = supabase.table("user_monitors").select("*").not_.is_("pending_alert_msg", "null").execute()
+            rows = res.data
+
+            if rows:
+                for row in rows:
+                    msg = row.get("pending_alert_msg")
+                    b64_img = row.get("pending_alert_img")
+                    row_key = row.get("license_key") or row.get("hwid") or "Unknown"
+
+                    if msg and ADMIN_DISCORD_WEBHOOK:
+                        payload_data = {"content": f"🤖 **[Bot: {row_key}]**\n{msg}"}
+                        files = None
+
+                        # ถ้านำรูปแนบมาด้วย ให้ถอดรหัส Base64 ส่งเข้า Discord
+                        if b64_img:
+                            try:
+                                img_bytes = base64.b64decode(b64_img)
+                                files = {'file': ('screenshot.png', img_bytes, 'image/png')}
+                            except Exception:
+                                pass
+
+                        # ยิงเข้า Discord Webhook จากฝั่งเซิร์ฟเวอร์
+                        requests.post(ADMIN_DISCORD_WEBHOOK, data=payload_data, files=files)
+
+                        # เคลียร์ค่าในคอลัมน์ออกทันที ป้องกันการส่งซ้ำ
+                        supabase.table("user_monitors").update({
+                            "pending_alert_msg": None,
+                            "pending_alert_img": None
+                        }).eq("id", row["id"]).execute()
+
+        except Exception:
+            pass
+
+        time.sleep(3) # เช็คคิวทุกๆ 3 วินาที
+
+# เริ่มรันระบบ Relay Worker เบื้องหลัง
+if "relay_started" not in st.session_state:
+    st.session_state.relay_started = True
+    threading.Thread(target=discord_relay_worker, daemon=True).start()
+
 # 🔒 ระบบล็อกอินความปลอดภัยสำหรับ Admin
-ADMIN_PIN = "7692"  # 👈 เปลี่ยนรหัส PIN ตรงนี้ได้ตามต้องการ
+ADMIN_PIN = "7692"
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -145,7 +198,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     "is_active": True,
                     "is_used": False,
                     "hwid": None,
-                    "key_type": key_type_choice  # 🟢 เพิ่มการบันทึกประเภทคีย์
+                    "key_type": key_type_choice
                 }
                 try:
                     supabase.table("licenses").insert(payload).execute()
@@ -190,7 +243,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
             df_keys = pd.DataFrame(keys_data)
             
-            # 🟢 ปรับแต่งการแสดงผลคอลัมน์ในตาราง
             if "key_type" not in df_keys.columns:
                 df_keys["key_type"] = "normal"
             
