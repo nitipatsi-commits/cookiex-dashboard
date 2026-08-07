@@ -121,9 +121,9 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
                 df["last_seen"] = df["last_seen"].dt.tz_convert("Asia/Bangkok").dt.strftime("%Y-%m-%d %H:%M:%S")
 
             total_bots = len(df)
-            active_bots = len(df[df["status"] == "RUNNING"])
-            captcha_bots = len(df[df["current_step"].str.contains("CAPTCHA", na=False)])
-            crashed_bots = len(df[df["status"] == "CRASH"])
+            active_bots = len(df[df["status"] == "RUNNING"]) if "status" in df.columns else 0
+            captcha_bots = len(df[df["current_step"].str.contains("CAPTCHA", na=False)]) if "current_step" in df.columns else 0
+            crashed_bots = len(df[df["status"] == "CRASH"]) if "status" in df.columns else 0
             total_boxes = df["boxes_collected"].sum() if "boxes_collected" in df.columns else 0
 
             # การ์ดสรุปยอด
@@ -145,7 +145,7 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
             st.subheader("📸 สั่งแคปหน้าจอบอทรอบสด (Remote Screenshot)")
             
             # ดึงรายชื่อ License Key ทั้งหมดในระบบ
-            bot_keys = df["license_key"].tolist()
+            bot_keys = df["license_key"].dropna().tolist() if "license_key" in df.columns else []
             if bot_keys:
                 col_ss1, col_ss2 = st.columns([3, 2])
                 with col_ss1:
@@ -155,10 +155,12 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
                     st.write("")
                     if st.button("📷 สั่งแคปหน้าจอส่งเข้า Discord", key="btn_send_ss"):
                         try:
+                            # 🟢 ส่งคำสั่ง screenshot ลง Supabase
                             supabase.table("user_monitors").update({
                                 "action_command": "screenshot"
                             }).eq("license_key", selected_bot_key).execute()
-                            st.success(f"ส่งคำสั่งแคปหน้าจอไปที่ `{selected_bot_key}` แล้ว! รูปจะส่งเข้า Discord ภายใน 1 วินาที")
+                            
+                            st.success(f"สั่งแคปหน้าจอคีย์ `{selected_bot_key}` เรียบร้อยแล้ว! บอทจะส่งภาพเข้า Discord ในไม่ช้า")
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาดในการส่งคำสั่ง: {ex}")
             else:
