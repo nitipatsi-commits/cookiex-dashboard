@@ -30,7 +30,7 @@ ADMIN_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1534196144307966074/HU
 def discord_relay_worker():
     while True:
         try:
-            # ดึงรายการที่มีข้อความ/ภาพแจ้งเตือนตกค้าง
+            # ดึงรายการที่มีข้อความค้าง
             res = supabase.table("user_monitors").select("*").not_.is_("pending_alert_msg", "null").execute()
             rows = res.data
 
@@ -39,12 +39,19 @@ def discord_relay_worker():
                     msg = row.get("pending_alert_msg")
                     b64_img = row.get("pending_alert_img")
                     row_key = row.get("license_key") or row.get("hwid") or "Unknown"
+                    row_id = row.get("id")
 
+                    # 🚨 1. เคลียร์ค่าใน Supabase ออกก่อนทันที! ป้องกันลูปค้างหากยิง Discord ล้มเหลว
+                    supabase.table("user_monitors").update({
+                        "pending_alert_msg": None,
+                        "pending_alert_img": None
+                    }).eq("id", row_id).execute()
+
+                    # 2. ถ้าระบบมี Webhook ค่อยยิงเข้า Discord
                     if msg and ADMIN_DISCORD_WEBHOOK:
                         payload_data = {"content": f"🤖 **[Bot: {row_key}]**\n{msg}"}
                         files = None
 
-                        # ถ้านำรูปแนบมาด้วย ให้ถอดรหัส Base64 ส่งเข้า Discord
                         if b64_img:
                             try:
                                 img_bytes = base64.b64decode(b64_img)
@@ -52,19 +59,12 @@ def discord_relay_worker():
                             except Exception:
                                 pass
 
-                        # ยิงเข้า Discord Webhook จากฝั่งเซิร์ฟเวอร์
                         requests.post(ADMIN_DISCORD_WEBHOOK, data=payload_data, files=files)
 
-                        # เคลียร์ค่าในคอลัมน์ออกทันที ป้องกันการส่งซ้ำ
-                        supabase.table("user_monitors").update({
-                            "pending_alert_msg": None,
-                            "pending_alert_img": None
-                        }).eq("id", row["id"]).execute()
+        except Exception as e:
+            print(f"Relay Error: {e}")
 
-        except Exception:
-            pass
-
-        time.sleep(3) # เช็คคิวทุกๆ 3 วินาที
+        time.sleep(3)
 
 # เริ่มรันระบบ Relay Worker เบื้องหลัง
 if "relay_started" not in st.session_state:
