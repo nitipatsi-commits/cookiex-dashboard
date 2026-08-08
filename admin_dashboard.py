@@ -23,8 +23,17 @@ SUPABASE_URL = "https://dkgeqwmuvgjlaweamhsc.supabase.co"
 SUPABASE_KEY = "sb_publishable_GjArIEEPL9ZcIWuOl28J6Q_4QmIeWEk"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 🔒 Discord Webhook ฝั่ง Admin (ปลอดภัย 100% ลูกค้ามองไม่เห็น)
-ADMIN_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1534196144307966074/HUMcKoACWdddQqGoCRScYZFgS_jplvkJjOs-qp2-KGrX7vOVZGz_hTOnwzGNAUuM7gZk"
+# 🔒 [FIX] เดิม hardcode webhook URL ไว้ตรงๆ ในซอร์สโค้ดไฟล์นี้ ถ้า repo ที่ใช้ deploy Streamlit เป็น public
+# (ซึ่งเป็นวิธี deploy มาตรฐานของ Streamlit Community Cloud) ใครก็เห็น URL นี้ได้ทันทีจากหน้า GitHub
+# เปลี่ยนมาอ่านจาก st.secrets แทน (เก็บใน .streamlit/secrets.toml ในเครื่อง หรือช่อง "Secrets" ของ Streamlit Cloud)
+# ห้าม commit ไฟล์ secrets.toml เข้า git เด็ดขาด (ใส่ไว้ใน .gitignore)
+#
+# ตัวอย่างไฟล์ .streamlit/secrets.toml:
+#   ADMIN_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/xxxx/xxxx"
+#   ADMIN_PIN = "7692"
+ADMIN_DISCORD_WEBHOOK = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
+if not ADMIN_DISCORD_WEBHOOK:
+    st.warning("⚠️ ยังไม่ได้ตั้งค่า ADMIN_DISCORD_WEBHOOK ใน st.secrets — ฟีเจอร์ส่งภาพ/แจ้งเตือนเข้า Discord จะใช้งานไม่ได้")
 
 # 🟢 ปรับแก้ Relay Worker ป้องกัน Thread ซ้ำ และล้างค่าก่อนยิง Discord
 def discord_relay_worker():
@@ -75,7 +84,13 @@ if "relay_started" not in st.session_state:
     threading.Thread(target=discord_relay_worker, daemon=True).start()
 
 # 🔒 ระบบล็อกอินความปลอดภัยสำหรับ Admin
-ADMIN_PIN = "7692"
+# 🔒 [FIX] เดิม PIN เข้าระบบแอดมิน hardcode เป็น "7692" อยู่ในซอร์สตรงๆ — เป็นรหัสผ่านเข้าทั้งระบบ
+# (Key Manager / Live Monitor / Active Sessions) ถ้า repo public ใครก็ล็อกอินเข้าแผงควบคุมแอดมินได้เลย
+# ย้ายไปอ่านจาก st.secrets เหมือนกับ webhook ด้านบน
+ADMIN_PIN = st.secrets.get("ADMIN_PIN", "")
+if not ADMIN_PIN:
+    st.error("❌ ยังไม่ได้ตั้งค่า ADMIN_PIN ใน st.secrets — กรุณาตั้งค่าก่อนใช้งานระบบ (ดูตัวอย่างในคอมเมนต์ด้านบนของไฟล์)")
+    st.stop()
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
