@@ -26,6 +26,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # 🔒 Discord Webhook ฝั่ง Admin (ปลอดภัย 100% ลูกค้ามองไม่เห็น)
 ADMIN_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1534196144307966074/HUMcKoACWdddQqGoCRScYZFgS_jplvkJjOs-qp2-KGrX7vOVZGz_hTOnwzGNAUuM7gZk"
 
+# 🟢 ปรับแก้ Relay Worker ป้องกัน Thread ซ้ำ และล้างค่าก่อนยิง Discord
 def discord_relay_worker():
     while True:
         try:
@@ -34,18 +35,18 @@ def discord_relay_worker():
 
             if rows:
                 for row in rows:
+                    row_id = row.get("id")
                     msg = row.get("pending_alert_msg")
                     b64_img = row.get("pending_alert_img")
                     row_key = row.get("license_key") or row.get("hwid") or "Unknown"
-                    row_id = row.get("id")
 
-                    # 🚨 1. ล้างค่าในฐานข้อมูลทิ้งทันทีเป็นอันดับแรก!
+                    # 🚨 1. ล้างค่าในฐานข้อมูลทิ้งทันทีเป็นอันดับแรกเพื่อป้องกันการยิงซ้ำ!
                     supabase.table("user_monitors").update({
                         "pending_alert_msg": None,
                         "pending_alert_img": None
                     }).eq("id", row_id).execute()
 
-                    # 🚨 2. ถ้าระบบส่งข้อความมาเป็นคำว่า [NULL] หรือ None ให้ข้าม ไม่ต้องยิงเข้า Discord
+                    # 🚨 2. ถ้าระบบส่งข้อความมาเป็นคำว่า [NULL] หรือ None ให้ข้าม
                     if not msg or str(msg).strip() in ["[NULL]", "None", "null", ""]:
                         continue
 
@@ -54,7 +55,7 @@ def discord_relay_worker():
                         payload_data = {"content": f"🤖 **[Bot: {row_key}]**\n{msg}"}
                         files = None
 
-                        if b64_img and len(str(b64_img)) > 20: # เช็คว่ามีรูปจริง ไม่ใช่ไฟล์เสีย 3 bytes
+                        if b64_img and len(str(b64_img)) > 20: # เช็คว่ามีรูปจริง ไม่ใช่ไฟล์เสีย
                             try:
                                 img_bytes = base64.b64decode(b64_img)
                                 files = {'file': ('screenshot.png', img_bytes, 'image/png')}
@@ -63,12 +64,12 @@ def discord_relay_worker():
 
                         requests.post(ADMIN_DISCORD_WEBHOOK, data=payload_data, files=files)
 
-        except Exception as e:
+        except Exception:
             pass
 
         time.sleep(3)
 
-# เริ่มรันระบบ Relay Worker เบื้องหลัง
+# 🟢 ล็อกให้รัน Relay Worker เพียง 1 Thread เดียวในระบบ
 if "relay_started" not in st.session_state:
     st.session_state.relay_started = True
     threading.Thread(target=discord_relay_worker, daemon=True).start()
@@ -188,7 +189,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             key_type_choice = st.selectbox("ประเภทสิทธิ์ใช้งาน (Key Type):", ["normal", "premier"], format_func=lambda x: "👑 Premier (พรีเมียม)" if x == "premier" else "👤 Normal (ปกติ)")
             days_valid = st.number_input("จำนวนวันที่ใช้งานได้ (วัน):", min_value=1, max_value=3650, value=30)
             
-            # 🟢 [เพิ่มใหม่] กำหนดจำนวนจอสูงสุดที่อนุญาตให้เปิดพร้อมกัน
+            # 🟢 กำหนดจำนวนจอสูงสุดที่อนุญาตให้เปิดพร้อมกัน
             max_sessions_input = st.number_input("จำนวนจอสูงสุดที่เปิดได้พร้อมกัน (max_sessions):", min_value=1, max_value=100, value=1)
             
             submitted = st.form_submit_button("➕ สร้างคีย์ใหม่")
@@ -207,7 +208,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     "is_used": False,
                     "hwid": None,
                     "key_type": key_type_choice,
-                    "max_sessions": max_sessions_input  # 🟢 แนบค่าโควตาจอลงฐานข้อมูล
+                    "max_sessions": max_sessions_input
                 }
                 try:
                     supabase.table("licenses").insert(payload).execute()
@@ -258,7 +259,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             if "max_sessions" not in df_keys.columns:
                 df_keys["max_sessions"] = 1
             
-            # 🟢 แสดงคอลัมน์ max_sessions บนตารางรายการคีย์
             show_key_cols = ["id", "license_key", "key_type", "max_sessions", "expire_date", "is_active", "is_used", "hwid"]
             existing_key_cols = [c for c in show_key_cols if c in df_keys.columns]
             
@@ -313,7 +313,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     current_type = str(selected_item.get("key_type", "normal")).lower()
                     current_max_sessions = int(selected_item.get("max_sessions", 1))
 
-                    # 🟢 1. Dropdown เลือกปรับยศ Normal / Premier
+                    # 1. Dropdown เลือกปรับยศ Normal / Premier
                     type_options = ["normal", "premier"]
                     type_index = 1 if current_type == "premier" else 0
                     new_key_type = st.selectbox(
@@ -335,7 +335,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                     st.markdown("---")
 
-                    # 🟢 2. ปรับโควตาจำนวนจอสูงสุด (max_sessions)
+                    # 2. ปรับโควตาจำนวนจอสูงสุด (max_sessions)
                     new_max_sessions = st.number_input(
                         "โควตาจำนวนจอสูงสุด (max_sessions):", 
                         min_value=1, 
@@ -373,7 +373,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                             st.success(f"ปลดล็อก HWID คีย์ `{target_key}` เรียบร้อย!")
                             st.rerun()
                     with c_hwid2:
-                        # 🟢 [เพิ่มใหม่] ปุ่มสั่งเคลียร์เซสชันที่ค้างทั้งหมดของคีย์นี้
                         if st.button("🧹 เคลียร์เซสชันค้าง", key=f"btn_clear_sess_{target_id}"):
                             try:
                                 supabase.table("active_sessions").delete().eq("license_key", target_key).execute()
@@ -385,11 +384,8 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     st.markdown("---")
                     # 5. ปุ่มลบคีย์
                     if st.button("❌ ลบ License Key นี้ออกจากระบบ", type="primary", key=f"btn_del_{target_id}"):
-                        # 🟢 ลบข้อมูลคีย์หลัก
                         supabase.table("licenses").delete().eq("id", target_id).execute()
-                        # 🟢 ลบเซสชันสดที่ค้างอยู่ของคีย์นี้ทิ้งด้วย
                         supabase.table("active_sessions").delete().eq("license_key", target_key).execute()
-    
                         st.warning(f"ลบ License Key `{target_key}` และเซสชันทั้งหมดเรียบร้อยแล้ว!")
                         st.rerun()
 
