@@ -49,11 +49,18 @@ def discord_relay_worker():
                     b64_img = row.get("pending_alert_img")
                     row_key = row.get("license_key") or row.get("hwid") or "Unknown"
 
-                    # 🚨 1. ล้างค่าในฐานข้อมูลทิ้งทันทีเป็นอันดับแรกเพื่อป้องกันการยิงซ้ำ!
-                    supabase.table("user_monitors").update({
+                    # 🚨 1. [FIX] เดิมแค่ SELECT แล้วค่อย UPDATE แยกกัน 2 จังหวะ -> มีช่วงเสี้ยววินาทีที่ worker
+                    # อีกตัว (ถ้าดันมีมากกว่า 1 พร้อมกัน) อ่านค่าเดิมทันก่อนจะถูกเคลียร์ ทำให้ส่งซ้ำ
+                    # เปลี่ยนเป็นใส่เงื่อนไข "ต้องยังไม่ null" ไว้ใน WHERE ของ UPDATE เอง (atomic ระดับแถวจาก Postgres)
+                    # ใครก็ตามที่ UPDATE ไปถึงก่อนจะ "ชนะ" claim แถวนี้ อีกฝั่งจะได้แถวว่างกลับมา (แพ้ race) แล้วข้ามไปเลย
+                    claim_res = supabase.table("user_monitors").update({
                         "pending_alert_msg": None,
                         "pending_alert_img": None
-                    }).eq("id", row_id).execute()
+                    }).eq("id", row_id).not_.is_("pending_alert_msg", "null").execute()
+
+                    won_claim = bool(claim_res.data)
+                    if not won_claim:
+                        continue  # แพ้ race ให้ worker อื่นไปแล้ว ไม่ต้องส่งซ้ำ
 
                     # 🚨 2. ถ้าระบบส่งข้อความมาเป็นคำว่า [NULL] หรือ None ให้ข้าม
                     if not msg or str(msg).strip() in ["[NULL]", "None", "null", ""]:
@@ -78,10 +85,21 @@ def discord_relay_worker():
 
         time.sleep(3)
 
-# 🟢 ล็อกให้รัน Relay Worker เพียง 1 Thread เดียวในระบบ
-if "relay_started" not in st.session_state:
-    st.session_state.relay_started = True
-    threading.Thread(target=discord_relay_worker, daemon=True).start()
+# 🟢 [FIX] เดิมใช้ st.session_state กันไม่ให้สร้าง thread ซ้ำ แต่ session_state เป็น "ต่อแท็บ/ต่อ session"
+# เปิดหน้าเว็บ 2 แท็บ หรือรีเฟรชแล้ว Streamlit สร้าง session ใหม่ = ได้ thread ส่งข้อความอีกตัวซ้อนขึ้นมาทันที
+# เปลี่ยนเป็นตัวแปร global ระดับโปรเซส (ใช้ threading.Lock กันการแข่งกันสร้างตอนเปิดพร้อมกันเป๊ะๆ)
+# ทำให้ทั้งเซิร์ฟเวอร์มี relay worker แค่ 1 thread เท่านั้น ไม่ว่าจะมีกี่แท็บ/กี่ session ต่อเข้ามา
+_relay_worker_started = False
+_relay_worker_lock = threading.Lock()
+
+def start_relay_worker_once():
+    global _relay_worker_started
+    with _relay_worker_lock:
+        if not _relay_worker_started:
+            _relay_worker_started = True
+            threading.Thread(target=discord_relay_worker, daemon=True).start()
+
+start_relay_worker_once()
 
 # 🔒 ระบบล็อกอินความปลอดภัยสำหรับ Admin
 # 🔒 [FIX] เดิม PIN เข้าระบบแอดมิน hardcode เป็น "7692" อยู่ในซอร์สตรงๆ — เป็นรหัสผ่านเข้าทั้งระบบ
