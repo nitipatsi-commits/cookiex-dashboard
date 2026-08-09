@@ -23,19 +23,12 @@ SUPABASE_URL = "https://dkgeqwmuvgjlaweamhsc.supabase.co"
 SUPABASE_KEY = "sb_publishable_GjArIEEPL9ZcIWuOl28J6Q_4QmIeWEk"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# 🔒 [FIX] เดิม hardcode webhook URL ไว้ตรงๆ ในซอร์สโค้ดไฟล์นี้ ถ้า repo ที่ใช้ deploy Streamlit เป็น public
-# (ซึ่งเป็นวิธี deploy มาตรฐานของ Streamlit Community Cloud) ใครก็เห็น URL นี้ได้ทันทีจากหน้า GitHub
-# เปลี่ยนมาอ่านจาก st.secrets แทน (เก็บใน .streamlit/secrets.toml ในเครื่อง หรือช่อง "Secrets" ของ Streamlit Cloud)
-# ห้าม commit ไฟล์ secrets.toml เข้า git เด็ดขาด (ใส่ไว้ใน .gitignore)
-#
-# ตัวอย่างไฟล์ .streamlit/secrets.toml:
-#   ADMIN_DISCORD_WEBHOOK = "https://discord.com/api/webhooks/xxxx/xxxx"
-#   ADMIN_PIN = "7692"
+# 🔒 [FIX] อ่านค่า Webhook จาก st.secrets ป้องกันการรั่วไหลบน GitHub สาธารณะ[cite: 2]
 ADMIN_DISCORD_WEBHOOK = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
 if not ADMIN_DISCORD_WEBHOOK:
     st.warning("⚠️ ยังไม่ได้ตั้งค่า ADMIN_DISCORD_WEBHOOK ใน st.secrets — ฟีเจอร์ส่งภาพ/แจ้งเตือนเข้า Discord จะใช้งานไม่ได้")
 
-# 🟢 ปรับแก้ Relay Worker ป้องกัน Thread ซ้ำ และล้างค่าก่อนยิง Discord
+# 🟢 ปรับแก้ Relay Worker ป้องกัน Thread ซ้ำ และล้างค่าก่อนยิง Discord[cite: 2]
 def discord_relay_worker():
     while True:
         try:
@@ -49,10 +42,7 @@ def discord_relay_worker():
                     b64_img = row.get("pending_alert_img")
                     row_key = row.get("license_key") or row.get("hwid") or "Unknown"
 
-                    # 🚨 1. [FIX] เดิมแค่ SELECT แล้วค่อย UPDATE แยกกัน 2 จังหวะ -> มีช่วงเสี้ยววินาทีที่ worker
-                    # อีกตัว (ถ้าดันมีมากกว่า 1 พร้อมกัน) อ่านค่าเดิมทันก่อนจะถูกเคลียร์ ทำให้ส่งซ้ำ
-                    # เปลี่ยนเป็นใส่เงื่อนไข "ต้องยังไม่ null" ไว้ใน WHERE ของ UPDATE เอง (atomic ระดับแถวจาก Postgres)
-                    # ใครก็ตามที่ UPDATE ไปถึงก่อนจะ "ชนะ" claim แถวนี้ อีกฝั่งจะได้แถวว่างกลับมา (แพ้ race) แล้วข้ามไปเลย
+                    # 🚨 1. Atomic Claim ผ่านเงื่อนไข WHERE ใน Postgres ป้องกันการยิงซ้ำจากหลาย worker[cite: 2]
                     claim_res = supabase.table("user_monitors").update({
                         "pending_alert_msg": None,
                         "pending_alert_img": None
@@ -60,18 +50,18 @@ def discord_relay_worker():
 
                     won_claim = bool(claim_res.data)
                     if not won_claim:
-                        continue  # แพ้ race ให้ worker อื่นไปแล้ว ไม่ต้องส่งซ้ำ
+                        continue  # แพ้ race ให้ worker อื่นไปแล้ว[cite: 2]
 
-                    # 🚨 2. ถ้าระบบส่งข้อความมาเป็นคำว่า [NULL] หรือ None ให้ข้าม
+                    # 🚨 2. ถ้าระบบส่งข้อความมาเป็นคำว่า [NULL] หรือ None ให้ข้าม[cite: 2]
                     if not msg or str(msg).strip() in ["[NULL]", "None", "null", ""]:
                         continue
 
-                    # 3. ยิงเข้า Discord หากมีข้อความจริง
+                    # 3. ยิงเข้า Discord หากมีข้อความจริง[cite: 2]
                     if ADMIN_DISCORD_WEBHOOK:
                         payload_data = {"content": f"🤖 **[Bot: {row_key}]**\n{msg}"}
                         files = None
 
-                        if b64_img and len(str(b64_img)) > 20: # เช็คว่ามีรูปจริง ไม่ใช่ไฟล์เสีย
+                        if b64_img and len(str(b64_img)) > 20: # เช็คว่ามีรูปจริง ไม่ใช่ไฟล์เสีย[cite: 2]
                             try:
                                 img_bytes = base64.b64decode(b64_img)
                                 files = {'file': ('screenshot.png', img_bytes, 'image/png')}
@@ -85,10 +75,7 @@ def discord_relay_worker():
 
         time.sleep(3)
 
-# 🟢 [FIX] เดิมใช้ st.session_state กันไม่ให้สร้าง thread ซ้ำ แต่ session_state เป็น "ต่อแท็บ/ต่อ session"
-# เปิดหน้าเว็บ 2 แท็บ หรือรีเฟรชแล้ว Streamlit สร้าง session ใหม่ = ได้ thread ส่งข้อความอีกตัวซ้อนขึ้นมาทันที
-# เปลี่ยนเป็นตัวแปร global ระดับโปรเซส (ใช้ threading.Lock กันการแข่งกันสร้างตอนเปิดพร้อมกันเป๊ะๆ)
-# ทำให้ทั้งเซิร์ฟเวอร์มี relay worker แค่ 1 thread เท่านั้น ไม่ว่าจะมีกี่แท็บ/กี่ session ต่อเข้ามา
+# 🟢 ป้องกันการสร้าง thread ซ้ำระดับโปรเซส[cite: 2]
 _relay_worker_started = False
 _relay_worker_lock = threading.Lock()
 
@@ -101,13 +88,10 @@ def start_relay_worker_once():
 
 start_relay_worker_once()
 
-# 🔒 ระบบล็อกอินความปลอดภัยสำหรับ Admin
-# 🔒 [FIX] เดิม PIN เข้าระบบแอดมิน hardcode เป็น "7692" อยู่ในซอร์สตรงๆ — เป็นรหัสผ่านเข้าทั้งระบบ
-# (Key Manager / Live Monitor / Active Sessions) ถ้า repo public ใครก็ล็อกอินเข้าแผงควบคุมแอดมินได้เลย
-# ย้ายไปอ่านจาก st.secrets เหมือนกับ webhook ด้านบน
+# 🔒 อ่าน PIN แอดมินจาก st.secrets[cite: 2]
 ADMIN_PIN = st.secrets.get("ADMIN_PIN", "")
 if not ADMIN_PIN:
-    st.error("❌ ยังไม่ได้ตั้งค่า ADMIN_PIN ใน st.secrets — กรุณาตั้งค่าก่อนใช้งานระบบ (ดูตัวอย่างในคอมเมนต์ด้านบนของไฟล์)")
+    st.error("❌ ยังไม่ได้ตั้งค่า ADMIN_PIN ใน st.secrets — กรุณาตั้งค่าก่อนใช้งานระบบ")
     st.stop()
 
 if "authenticated" not in st.session_state:
@@ -135,11 +119,11 @@ if st.sidebar.button("🚪 ออกจากระบบ"):
     st.rerun()
 
 # ---------------------------------------------------------
-# 📊 TAB 1: LIVE MONITOR (มอนิเตอร์สถานะบอทลูกค้า)
+# 📊 TAB 1: LIVE MONITOR (มอนิเตอร์สถานะบอทลูกค้า + สเปคคอม)
 # ---------------------------------------------------------
 if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
     st.title("📊 Live Bot Monitor")
-    st.caption("มอนิเตอร์สถานะลูกค้าเรียลไทม์")
+    st.caption("มอนิเตอร์สถานะลูกค้าเรียลไทม์และสเปคฮาร์ดแวร์เครื่องลูกค้า")
 
     if st.button("🔄 รีเฟรชข้อมูลสด"):
         st.rerun()
@@ -171,8 +155,8 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
 
             st.divider()
 
-            # แสดงตาราง
-            show_cols = ["license_key", "status", "current_step", "farm_mode", "boxes_collected", "lives_collected", "cpu_usage", "ram_usage", "bot_version", "last_seen"]
+            # 🟢 แสดงตาราง (เพิ่มคอลัมน์ pc_specs เข้าไปในรายการที่จะแสดงผล)
+            show_cols = ["license_key", "status", "current_step", "farm_mode", "boxes_collected", "lives_collected", "cpu_usage", "ram_usage", "pc_specs", "bot_version", "last_seen"]
             existing_cols = [c for c in show_cols if c in df.columns]
             st.dataframe(df[existing_cols], use_container_width=True, hide_index=True)
 
@@ -180,7 +164,6 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
             st.divider()
             st.subheader("📸 สั่งแคปหน้าจอบอทรอบสด (Remote Screenshot)")
             
-            # ดึงรายชื่อ License Key ทั้งหมดในระบบ
             bot_keys = df["license_key"].dropna().tolist() if "license_key" in df.columns else []
             if bot_keys:
                 col_ss1, col_ss2 = st.columns([3, 2])
@@ -191,7 +174,6 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
                     st.write("")
                     if st.button("📷 สั่งแคปหน้าจอส่งเข้า Discord", key="btn_send_ss"):
                         try:
-                            # 🟢 ส่งคำสั่ง screenshot ลง Supabase
                             supabase.table("user_monitors").update({
                                 "action_command": "screenshot"
                             }).eq("license_key", selected_bot_key).execute()
@@ -209,20 +191,17 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
 
 # ---------------------------------------------------------
-# 🔑 TAB 2: KEY MANAGER (เพิ่ม / แก้ไข / ต่ออายุ / ปรับสิทธิ์ Premier / ปรับ max_sessions)
+# 🔑 TAB 2: KEY MANAGER (จัดการคีย์)
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
     st.caption("ระบบเพิ่ม เพิ่มเวลา ปรับยศสิทธิ์ (Normal/Premier) กำหนดจำนวนโควตาจอ และจัดการคีย์ลูกค้า")
 
-    # --- Section 1: เพิ่มคีย์ใหม่ ---
     with st.expander("➕ เพิ่มคีย์ใหม่ (Add New License)", expanded=False):
         with st.form("add_key_form"):
             new_key = st.text_input("License Key (หากเว้นว่างไว้จะสุ่มให้อัตโนมัติ 10 หลัก):", value="")
             key_type_choice = st.selectbox("ประเภทสิทธิ์ใช้งาน (Key Type):", ["normal", "premier"], format_func=lambda x: "👑 Premier (พรีเมียม)" if x == "premier" else "👤 Normal (ปกติ)")
             days_valid = st.number_input("จำนวนวันที่ใช้งานได้ (วัน):", min_value=1, max_value=3650, value=30)
-            
-            # 🟢 กำหนดจำนวนจอสูงสุดที่อนุญาตให้เปิดพร้อมกัน
             max_sessions_input = st.number_input("จำนวนจอสูงสุดที่เปิดได้พร้อมกัน (max_sessions):", min_value=1, max_value=100, value=1)
             
             submitted = st.form_submit_button("➕ สร้างคีย์ใหม่")
@@ -251,7 +230,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
     st.divider()
 
-    # --- Section 2: รายการคีย์ทั้งหมดและการจัดการ ---
     st.subheader("📋 รายการ License Keys ในระบบ")
     
     try:
@@ -262,7 +240,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             today = datetime.now().date()
             expiring_keys = []
 
-            # 🚨 ค้นหาและเตรียมข้อมูลคีย์ที่กำลังจะหมดอายุใน 3 วัน
             for item in keys_data:
                 exp_str = item.get("expire_date", "")[:10]
                 try:
@@ -279,14 +256,12 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 except Exception:
                     pass
 
-            # แสดงแถบเตือนสีแดงด้านบนตาราง หากมีคีย์ใกล้หมดอายุ
             if expiring_keys:
                 st.warning("⚠️ **ตรวจพบ License Key ที่กำลังจะหมดอายุภายใน 3 วัน!**")
                 st.dataframe(pd.DataFrame(expiring_keys), use_container_width=True, hide_index=True)
                 st.divider()
 
             df_keys = pd.DataFrame(keys_data)
-            
             if "key_type" not in df_keys.columns:
                 df_keys["key_type"] = "normal"
             if "max_sessions" not in df_keys.columns:
@@ -295,16 +270,11 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             show_key_cols = ["id", "license_key", "key_type", "max_sessions", "expire_date", "is_active", "is_used", "hwid"]
             existing_key_cols = [c for c in show_key_cols if c in df_keys.columns]
             
-            st.dataframe(
-                df_keys[existing_key_cols],
-                use_container_width=True,
-                hide_index=True
-            )
+            st.dataframe(df_keys[existing_key_cols], use_container_width=True, hide_index=True)
 
             st.divider()
             st.subheader("🛠️ เครื่องมือจัดการคีย์")
 
-            # เลือกคีย์ที่จะจัดการ
             key_list = [f"{item['license_key']} [{str(item.get('key_type', 'normal')).upper()}] - {item.get('max_sessions', 1)} จอ (ID: {item['id']})" for item in keys_data]
             selected_option = st.selectbox("เลือก License Key ที่ต้องการจัดการ:", key_list)
 
@@ -314,7 +284,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                 col_a, col_b = st.columns(2)
 
-                # --- ฝั่งซ้าย: ต่ออายุ / แก้ไขวันหมดอายุ ---
                 with col_a:
                     st.markdown("##### 📅 ต่ออายุ / ปรับวันหมดอายุ")
                     current_exp_str = selected_item.get("expire_date", "")[:10]
@@ -337,7 +306,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาด: {ex}")
 
-                # --- ฝั่งขวา: ปรับยศ Premier / โควตาจอ / สถานะ / ปลด HWID & Sessions ---
                 with col_b:
                     st.markdown("##### ⚙️ จัดการสิทธิ์, โควตาจอ, สถานะ & HWID")
                     target_id = selected_item["id"]
@@ -346,7 +314,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     current_type = str(selected_item.get("key_type", "normal")).lower()
                     current_max_sessions = int(selected_item.get("max_sessions", 1))
 
-                    # 1. Dropdown เลือกปรับยศ Normal / Premier
                     type_options = ["normal", "premier"]
                     type_index = 1 if current_type == "premier" else 0
                     new_key_type = st.selectbox(
@@ -368,7 +335,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                     st.markdown("---")
 
-                    # 2. ปรับโควตาจำนวนจอสูงสุด (max_sessions)
                     new_max_sessions = st.number_input(
                         "โควตาจำนวนจอสูงสุด (max_sessions):", 
                         min_value=1, 
@@ -388,7 +354,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                     st.markdown("---")
 
-                    # 3. สวิตช์ เปิด/ปิด คีย์
                     new_active = st.checkbox("สถานะเปิดใช้งาน (is_active)", value=current_active, key=f"active_{target_id}")
                     if new_active != current_active:
                         if st.button("🔄 อัปเดตสถานะการใช้งาน", key=f"btn_act_{target_id}"):
@@ -396,7 +361,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                             st.success(f"อัปเดตสถานะคีย์ {target_key} สำเร็จ!")
                             st.rerun()
 
-                    # 4. ปุ่มปลดล็อก HWID & เคลียร์เซสชันค้าง
                     st.write(f"**HWID ปัจจุบัน:** `{selected_item.get('hwid')}`")
                     
                     c_hwid1, c_hwid2 = st.columns(2)
@@ -415,7 +379,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                 st.error(f"เคลียร์เซสชันไม่สำเร็จ: {ex}")
 
                     st.markdown("---")
-                    # 5. ปุ่มลบคีย์
                     if st.button("❌ ลบ License Key นี้ออกจากระบบ", type="primary", key=f"btn_del_{target_id}"):
                         supabase.table("licenses").delete().eq("id", target_id).execute()
                         supabase.table("active_sessions").delete().eq("license_key", target_key).execute()
@@ -443,7 +406,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         }
                         try:
                             supabase.table("app_versions").insert(payload).execute()
-                            st.success(f"🎉 ปล่อยอัปเดตเวอร์ชัน {ver_code} เรียบร้อยแล้ว! ลูกค้าที่เปิดบอทขึ้นมาจะเด้งป๊อปอัปให้อัปเดตทันที")
+                            st.success(f"🎉 ปล่อยอัปเดตเวอร์ชัน {ver_code} เรียบร้อยแล้ว!")
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาดในการปล่อยอัปเดต: {ex}")
 
@@ -451,7 +414,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูลคีย์: {e}")
 
 # ---------------------------------------------------------
-# 💻 TAB 3: ACTIVE SESSIONS (ดูและเคลียร์เซสชันสดรายจอ)
+# 💻 TAB 3: ACTIVE SESSIONS (เซสชันจอสด)
 # ---------------------------------------------------------
 elif menu == "💻 Active Sessions (เซสชันจอสด)":
     st.title("💻 Active Sessions Control")
@@ -467,7 +430,6 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
         if sess_data:
             df_sess = pd.DataFrame(sess_data)
             
-            # แปลงเวลา UTC -> เวลาไทย
             if "last_heartbeat" in df_sess.columns:
                 df_sess["last_heartbeat"] = pd.to_datetime(df_sess["last_heartbeat"])
                 df_sess["last_heartbeat"] = df_sess["last_heartbeat"].dt.tz_convert("Asia/Bangkok").dt.strftime("%Y-%m-%d %H:%M:%S")
