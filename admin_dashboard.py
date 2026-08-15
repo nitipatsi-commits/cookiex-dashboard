@@ -195,13 +195,22 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
-    st.caption("ระบบเพิ่ม เพิ่มเวลา ปรับยศสิทธิ์ (Normal/Premier) กำหนดจำนวนโควตาจอ และจัดการคีย์ลูกค้า")
+    st.caption("ระบบเพิ่ม เพิ่ม/ลดเวลา ปรับยศสิทธิ์ (Normal/Premier) กำหนดจำนวนโควตาจอ และจัดการคีย์ลูกค้า")
 
     with st.expander("➕ เพิ่มคีย์ใหม่ (Add New License)", expanded=False):
         with st.form("add_key_form"):
             new_key = st.text_input("License Key (หากเว้นว่างไว้จะสุ่มให้อัตโนมัติ 10 หลัก):", value="")
             key_type_choice = st.selectbox("ประเภทสิทธิ์ใช้งาน (Key Type):", ["normal", "premier"], format_func=lambda x: "👑 Premier (พรีเมียม)" if x == "premier" else "👤 Normal (ปกติ)")
-            days_valid = st.number_input("จำนวนวันที่ใช้งานได้ (วัน):", min_value=1, max_value=3650, value=30)
+            
+            st.markdown("##### ⏱️ กำหนดระยะเวลาใช้งานเริ่มต้น")
+            col_d, col_h, col_m = st.columns(3)
+            with col_d:
+                add_days = st.number_input("วัน (Days):", min_value=0, max_value=3650, value=30)
+            with col_h:
+                add_hours = st.number_input("ชั่วโมง (Hours):", min_value=0, max_value=23, value=0)
+            with col_m:
+                add_minutes = st.number_input("นาที (Minutes):", min_value=0, max_value=59, value=0)
+
             max_sessions_input = st.number_input("จำนวนจอสูงสุดที่เปิดได้พร้อมกัน (max_sessions):", min_value=1, max_value=100, value=1)
             
             submitted = st.form_submit_button("➕ สร้างคีย์ใหม่")
@@ -212,10 +221,11 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 else:
                     chars = string.ascii_uppercase + string.digits
                     final_key = ''.join(random.choices(chars, k=10))
-                exp_date = (datetime.now() + timedelta(days=days_valid)).strftime("%Y-%m-%d")
+                
+                exp_datetime = datetime.now() + timedelta(days=add_days, hours=add_hours, minutes=add_minutes)
                 payload = {
                     "license_key": final_key,
-                    "expire_date": exp_date,
+                    "expire_date": exp_datetime.strftime("%Y-%m-%d %H:%M:%S"),
                     "is_active": True,
                     "is_used": False,
                     "hwid": None,
@@ -224,7 +234,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 }
                 try:
                     supabase.table("licenses").insert(payload).execute()
-                    st.success(f"สร้างคีย์สำเร็จ! Key: `{final_key}` | สิทธิ์: **{key_type_choice.upper()}** | โควตา: **{max_sessions_input} จอ** (หมดอายุ: {exp_date})")
+                    st.success(f"สร้างคีย์สำเร็จ! Key: `{final_key}` | สิทธิ์: **{key_type_choice.upper()}** | โควตา: **{max_sessions_input} จอ** (หมดอายุ: {exp_datetime.strftime('%Y-%m-%d %H:%M:%S')})")
                 except Exception as ex:
                     st.error(f"สร้างคีย์ไม่สำเร็จ: {ex}")
 
@@ -285,23 +295,50 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 col_a, col_b = st.columns(2)
 
                 with col_a:
-                    st.markdown("##### 📅 ต่ออายุ / ปรับวันหมดอายุ")
-                    current_exp_str = selected_item.get("expire_date", "")[:10]
+                    st.markdown("##### 📅 จัดการเวลาหมดอายุ (เพิ่ม / ลด วัน, ชม., นาที)")
+                    current_exp_str = selected_item.get("expire_date", "")
+                    
                     try:
-                        current_exp_dt = datetime.strptime(current_exp_str, "%Y-%m-%d").date()
+                        clean_dt_str = current_exp_str.replace("T", " ")[:19]
+                        current_exp_dt = datetime.strptime(clean_dt_str, "%Y-%m-%d %H:%M:%S")
                     except Exception:
-                        current_exp_dt = datetime.now().date()
+                        try:
+                            current_exp_dt = datetime.strptime(clean_dt_str[:10], "%Y-%m-%d")
+                        except Exception:
+                            current_exp_dt = datetime.now()
 
-                    new_exp_date = st.date_input("เลือกวันหมดอายุใหม่:", value=current_exp_dt)
-                    add_days = st.number_input("หรือกดบวกเพิ่มจำนวนวัน (+วัน):", min_value=0, max_value=365, value=0)
+                    st.write(f"**วันหมดอายุเดิม:** `{current_exp_dt.strftime('%Y-%m-%d %H:%M:%S')}`")
 
-                    if st.button("💾 บันทึกการเปลี่ยนวันหมดอายุ", key=f"btn_save_exp_{selected_id}"):
-                        final_exp_dt = new_exp_date + timedelta(days=add_days)
+                    # 🟢 ปุ่มเลือกโหมด: เพิ่มเวลา หรือ ลดเวลา
+                    action_mode = st.radio(
+                        "เลือกการจัดการเวลา:", 
+                        ["➕ เพิ่มเวลา", "➖ ลดเวลาออก"], 
+                        horizontal=True, 
+                        key=f"action_mode_{selected_id}"
+                    )
+
+                    col_ad, col_ah, col_am = st.columns(3)
+                    with col_ad:
+                        p_days = st.number_input("จำนวน (วัน):", min_value=0, max_value=365, value=0, key=f"p_days_{selected_id}")
+                    with col_ah:
+                        p_hours = st.number_input("จำนวน (ชม.):", min_value=0, max_value=23, value=0, key=f"p_hours_{selected_id}")
+                    with col_am:
+                        p_minutes = st.number_input("จำนวน (นาที):", min_value=0, max_value=59, value=0, key=f"p_mins_{selected_id}")
+
+                    if st.button("💾 บันทึกการปรับเวลา", key=f"btn_save_exp_{selected_id}"):
+                        delta = timedelta(days=p_days, hours=p_hours, minutes=p_minutes)
+                        
+                        if action_mode == "➕ เพิ่มเวลา":
+                            final_exp_dt = current_exp_dt + delta
+                        else:
+                            final_exp_dt = current_exp_dt - delta
+                        
                         try:
                             supabase.table("licenses").update({
-                                "expire_date": final_exp_dt.strftime("%Y-%m-%d")
+                                "expire_date": final_exp_dt.strftime("%Y-%m-%d %H:%M:%S")
                             }).eq("id", selected_id).execute()
-                            st.success(f"อัปเดตวันหมดอายุสำเร็จเป็น: {final_exp_dt}")
+                            
+                            st.success(f"อัปเดตเวลาหมดอายุสำเร็จเป็น: {final_exp_dt.strftime('%Y-%m-%d %H:%M:%S')}")
                             st.rerun()
                         except Exception as ex:
                             st.error(f"เกิดข้อผิดพลาด: {ex}")
