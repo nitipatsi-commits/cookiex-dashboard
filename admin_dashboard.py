@@ -222,10 +222,14 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     chars = string.ascii_uppercase + string.digits
                     final_key = ''.join(random.choices(chars, k=10))
                 
-                exp_datetime = datetime.now() + timedelta(days=add_days, hours=add_hours, minutes=add_minutes)
+                # 🟢 บังคับใช้เวลาไทย (UTC+7) เป็นฐานเวลาปัจจุบัน
+                tz_th = timezone(timedelta(hours=7))
+                now_th = datetime.now(tz_th)
+                exp_datetime = now_th + timedelta(days=add_days, hours=add_hours, minutes=add_minutes)
+
                 payload = {
                     "license_key": final_key,
-                    "expire_date": exp_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+                    "expire_date": exp_datetime.isoformat(),  # 🟢 บันทึกแบบ ISO มี timezone กำกับชัดเจน
                     "is_active": True,
                     "is_used": False,
                     "hwid": None,
@@ -234,7 +238,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 }
                 try:
                     supabase.table("licenses").insert(payload).execute()
-                    st.success(f"สร้างคีย์สำเร็จ! Key: `{final_key}` | สิทธิ์: **{key_type_choice.upper()}** | โควตา: **{max_sessions_input} จอ** (หมดอายุ: {exp_datetime.strftime('%Y-%m-%d %H:%M:%S')})")
+                    st.success(f"🎉 สร้างคีย์สำเร็จ! Key: `{final_key}` (หมดอายุ: {exp_datetime.strftime('%Y-%m-%d %H:%M:%S')})")
                 except Exception as ex:
                     st.error(f"สร้างคีย์ไม่สำเร็จ: {ex}")
 
@@ -298,18 +302,16 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     st.markdown("##### 📅 จัดการเวลาหมดอายุ (เพิ่ม / ลด วัน, ชม., นาที)")
                     current_exp_str = selected_item.get("expire_date", "")
                     
+                    tz_th = timezone(timedelta(hours=7))
                     try:
-                        clean_dt_str = current_exp_str.replace("T", " ")[:19]
-                        current_exp_dt = datetime.strptime(clean_dt_str, "%Y-%m-%d %H:%M:%S")
+                        # แปลงเวลาเดิมให้เป็นเวลาไทย
+                        clean_dt = pd.to_datetime(current_exp_str).tz_convert("Asia/Bangkok")
+                        current_exp_dt = clean_dt.to_pydatetime()
                     except Exception:
-                        try:
-                            current_exp_dt = datetime.strptime(clean_dt_str[:10], "%Y-%m-%d")
-                        except Exception:
-                            current_exp_dt = datetime.now()
+                        current_exp_dt = datetime.now(tz_th)
 
                     st.write(f"**วันหมดอายุเดิม:** `{current_exp_dt.strftime('%Y-%m-%d %H:%M:%S')}`")
 
-                    # 🟢 ปุ่มเลือกโหมด: เพิ่มเวลา หรือ ลดเวลา
                     action_mode = st.radio(
                         "เลือกการจัดการเวลา:", 
                         ["➕ เพิ่มเวลา", "➖ ลดเวลาออก"], 
@@ -335,7 +337,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         
                         try:
                             supabase.table("licenses").update({
-                                "expire_date": final_exp_dt.strftime("%Y-%m-%d %H:%M:%S")
+                                "expire_date": final_exp_dt.isoformat()
                             }).eq("id", selected_id).execute()
                             
                             st.success(f"อัปเดตเวลาหมดอายุสำเร็จเป็น: {final_exp_dt.strftime('%Y-%m-%d %H:%M:%S')}")
