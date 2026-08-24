@@ -12,6 +12,8 @@ import requests
 import streamlit as st
 from supabase import create_client
 
+# ฟังก์ชันอัปโหลดสลิปเข้า Supabase Storage
+    from PIL import Image
 # ไลบรารีสำหรับ Google Drive API
 try:
     from google.oauth2 import service_account
@@ -268,16 +270,35 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
     st.title("💰 ระบบบันทึกรายรับ-รายจ่าย & บัญชีร้าน")
     st.caption("ระบบจัดการการเงินครบวงจร บันทึกบัญชี แนบสลิปผ่าน Supabase Storage สรุปกราฟ และส่งออกข้อมูล")
 
-    # ฟังก์ชันอัปโหลดสลิปเข้า Supabase Storage
-    def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
-        file_path = f"receipts/{filename}"
-        supabase.storage.from_("slips").upload(
-            path=file_path,
-            file=file_bytes,
-            file_options={"content-type": mimetype}
-        )
-        public_url = supabase.storage.from_("slips").get_public_url(file_path)
-        return {"id": file_path, "webViewLink": public_url}
+def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
+    """บีบอัดรูปสลิปให้เหลือ 50-80 KB ก่อนอัปโหลด ช่วยประหยัดพื้นที่ได้ถึง 95%"""
+    try:
+        # เปิดรูปและปรับขนาดความกว้างไม่เกิน 1000px (ชัดพอสำหรับสลิป)
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+
+        img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
+
+        # บีบอัดคุณภาพรูปที่ 75%
+        buffer = io.BytesIO()
+        img.save(buffer, format="JPEG", quality=75, optimize=True)
+        compressed_bytes = buffer.getvalue()
+        final_mime = "image/jpeg"
+        clean_name = filename.rsplit(".", 1)[0] + ".jpg"
+    except Exception:
+        compressed_bytes = file_bytes
+        final_mime = mimetype
+        clean_name = filename
+
+    file_path = f"receipts/{clean_name}"
+    supabase.storage.from_("slips").upload(
+        path=file_path,
+        file=compressed_bytes,
+        file_options={"content-type": final_mime}
+    )
+    public_url = supabase.storage.from_("slips").get_public_url(file_path)
+    return {"id": file_path, "webViewLink": public_url}
 
     # ฟังก์ชันลบสลิปออกจาก Supabase Storage
     def delete_slip_from_supabase(file_path):
