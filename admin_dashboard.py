@@ -13,7 +13,7 @@ import streamlit as st
 from supabase import create_client
 
 # ฟังก์ชันอัปโหลดสลิปเข้า Supabase Storage
-    from PIL import Image
+from PIL import Image
 # ไลบรารีสำหรับ Google Drive API
 try:
     from google.oauth2 import service_account
