@@ -195,9 +195,9 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
 # ---------------------------------------------------------
-# 🔑 TAB: จัดการ LICENSE KEY (LICENSE KEY MANAGER)
+# 🔑 TAB: จัดการ KEY MANAGER (LICENSE KEY MANAGER)
 # ---------------------------------------------------------
-elif menu == "🔑 จัดการ License Key" or menu == "🔑 License Key Manager":
+elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
     st.caption("ระบบเพิ่ม เพิ่ม/ลดเวลา ปรับยศสิทธิ์ (Normal/Premier) กำหนดจำนวนโควตาจอ และจัดการคีย์ลูกค้า")
 
@@ -259,11 +259,12 @@ elif menu == "🔑 จัดการ License Key" or menu == "🔑 License Key 
             # สรุปสถิติด้านบน
             total_keys = len(df_keys)
             active_keys = len(df_keys[df_keys.get("status", "active") == "active"]) if "status" in df_keys.columns else total_keys
+            total_screens = df_keys["max_concurrent"].sum() if "max_concurrent" in df_keys.columns else 0
             
             m1, m2, m3 = st.columns(3)
             m1.metric("🔑 จำนวนคีย์ทั้งหมด", f"{total_keys:,} คีย์")
             m2.metric("🟢 คีย์ที่พร้อมใช้งาน", f"{active_keys:,} คีย์")
-            m3.metric("💻 โควตาจอรวมทั้งหมด", f"{df_keys['max_concurrent'].sum() if 'max_concurrent' in df_keys.columns else 0:,} จอ")
+            m3.metric("💻 โควตาจอรวมทั้งหมด", f"{total_screens:,} จอ")
 
             st.write("")
 
@@ -368,7 +369,6 @@ elif menu == "🔑 จัดการ License Key" or menu == "🔑 License Key 
                 if st.button("❌ ยืนยันลบคีย์นี้ออกจากระบบ", type="primary"):
                     del_code = del_key_str.split(" |")[0]
                     supabase.table("licenses").delete().eq("license_key", del_code).execute()
-                    # ลบเซสชันที่ค้างอยู่ของคีย์นี้ด้วย
                     supabase.table("active_sessions").delete().eq("license_key", del_code).execute()
                     st.success(f"ลบคีย์ `{del_code}` เรียบร้อยแล้ว!")
                     st.rerun()
