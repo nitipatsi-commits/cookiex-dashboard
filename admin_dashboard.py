@@ -250,8 +250,16 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
     # 2. ตารางแสดงรายการคีย์ & สรุปข้อมูล
     # ==========================================
     try:
-        res_keys = supabase.table("licenses").select("*").order("created_at", desc=True).execute()
+        res_keys = supabase.table("licenses").select("*").execute()
         licenses_data = res_keys.data or []
+
+        if licenses_data:
+            df_keys = pd.DataFrame(licenses_data)
+            # เรียงลำดับใน Python แทน
+            if "created_at" in df_keys.columns:
+                df_keys = df_keys.sort_values(by="created_at", ascending=False)
+            elif "id" in df_keys.columns:
+                df_keys = df_keys.sort_values(by="id", ascending=False)
 
         if licenses_data:
             df_keys = pd.DataFrame(licenses_data)
