@@ -268,6 +268,22 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
     st.title("💰 ระบบบันทึกรายรับ-รายจ่าย & อัปโหลดสลิป")
     st.caption("บันทึกบัญชีร้าน พร้อมอัปโหลดรูปสลิปหลักฐานเก็บเข้า Google Drive อัตโนมัติ")
 
+    # ฟังก์ชันลบไฟล์สลิปออกจาก Google Drive
+    def delete_file_from_gdrive(file_id):
+        if not file_id:
+            return
+        try:
+            if not HAS_GDRIVE or "gcp_service_account" not in st.secrets:
+                return
+            creds_info = dict(st.secrets["gcp_service_account"])
+            creds = service_account.Credentials.from_service_account_info(
+                creds_info, scopes=["https://www.googleapis.com/auth/drive"]
+            )
+            service = build("drive", "v3", credentials=creds)
+            service.files().delete(fileId=file_id).execute()
+        except Exception:
+            pass
+
     # 1. กล่องกรอกข้อมูลรายการบัญชี
     with st.expander("📝 เพิ่มรายการรายรับ / รายจ่ายใหม่", expanded=True):
         with st.form("accounting_form", clear_on_submit=True):
@@ -276,10 +292,13 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                 tx_type = st.radio("ประเภทรายการ:", ["🟢 รายรับ (Income)", "🔴 รายจ่าย (Expense)"], horizontal=True)
                 amount = st.number_input("จำนวนเงิน (บาท):", min_value=0.0, step=50.0, format="%.2f")
                 category = st.selectbox("หมวดหมู่:", ["ขาย License Key", "ต่ออายุบอท", "ค่าโฮสต์/เซิร์ฟเวอร์", "ค่าไฟ/อินเทอร์เน็ต", "ค่าเครื่องมือพัฒนา", "อื่นๆ"])
+                customer_ref = st.text_input("👤 ชื่อลูกค้า / รหัสคีย์อ้างอิง:", placeholder="เช่น ลูกค้าคีย์ 1 เดือน หรือ คีย์ AB12CD34")
+
             with col_t2:
-                customer_ref = st.text_input("ชื่อลูกค้า / รหัสคีย์ / หมายเหตุ:", placeholder="เช่น ลูกค้าคีย์ 1 เดือน หรือ คีย์ ID 5")
                 tx_date = st.date_input("วันที่ทำรายการ:", value=datetime.now().date())
                 slip_file = st.file_uploader("📎 แนบรูปสลิปโอนเงิน (JPG / PNG):", type=["png", "jpg", "jpeg"])
+                # 🟢 เพิ่มช่องหมายเหตุเพิ่มเติมแยกต่างหาก
+                extra_note = st.text_area("📝 หมายเหตุเพิ่มเติม (Note):", placeholder="เช่น โอนเข้าบัญชีกสิกร / โปรโมชั่นลดราคา / อื่นๆ", height=68)
 
             submit_tx = st.form_submit_button("💾 บันทึกรายการและอัปโหลดสลิป")
 
@@ -307,12 +326,19 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                             except Exception as ex:
                                 st.warning(f"⚠️ บันทึกข้อมูลได้ แต่อัปโหลดสลิปไปยัง Google Drive ไม่สำเร็จ: {ex}")
 
-                    # บันทึกข้อมูลลงตาราง transactions ใน Supabase
+                    # รวมข้อความอ้างอิงและหมายเหตุเข้าด้วยกัน
+                    combined_note = ""
+                    if customer_ref.strip() and extra_note.strip():
+                        combined_note = f"{customer_ref.strip()} | {extra_note.strip()}"
+                    else:
+                        combined_note = customer_ref.strip() or extra_note.strip()
+
+                    # บันทึกข้อมูลลง Supabase
                     tx_payload = {
                         "type": "income" if "รายรับ" in tx_type else "expense",
                         "amount": amount,
                         "category": category,
-                        "note": customer_ref.strip(),
+                        "note": combined_note,
                         "slip_url": slip_url,
                         "drive_file_id": drive_file_id,
                         "created_at": datetime.combine(tx_date, datetime.now().time()).isoformat()
@@ -321,8 +347,9 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                     try:
                         supabase.table("accounting_records").insert(tx_payload).execute()
                         st.success(f"✅ บันทึกรายการ {category} ยอด {amount:,.2f} บาท เรียบร้อยแล้ว!")
+                        st.rerun()
                     except Exception as err:
-                        st.error(f"บันทึกฐานข้อมูลไม่สำเร็จ: {err} (กรุณาสร้างตาราง accounting_records ใน Supabase)")
+                        st.error(f"บันทึกฐานข้อมูลไม่สำเร็จ: {err}")
 
     st.divider()
 
@@ -335,7 +362,6 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
         if acc_data:
             df_acc = pd.DataFrame(acc_data)
             
-            # คำนวณยอดรวม
             total_income = df_acc[df_acc["type"] == "income"]["amount"].sum()
             total_expense = df_acc[df_acc["type"] == "expense"]["amount"].sum()
             net_profit = total_income - total_expense
@@ -346,7 +372,6 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             m3.metric("💵 กำไรสุทธิ (Net)", f"฿ {net_profit:,.2f}", delta=f"{net_profit:,.2f}")
 
             st.write("")
-            # จัดการ Format ตารางแสดงผล
             df_acc["ประเภท"] = df_acc["type"].map({"income": "🟢 รายรับ", "expense": "🔴 รายจ่าย"})
             df_acc["ยอดเงิน (บาท)"] = df_acc["amount"].map(lambda x: f"{x:,.2f}")
             df_acc["วันที่"] = pd.to_datetime(df_acc["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
@@ -357,12 +382,39 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             st.dataframe(
                 df_acc[valid_disp_cols],
                 column_config={
-                    "slip_url": st.column_config.LinkColumn("สลิปบน Google Drive", display_text="📂 เปิดดูรูปสลิป")
+                    "id": st.column_config.NumberColumn("ID รายการ", format="%d"),
+                    "note": st.column_config.TextColumn("ลูกค้า / หมายเหตุ (Note)"),
+                    "slip_url": st.column_config.LinkColumn("สลิป Google Drive", display_text="📂 เปิดดูรูปสลิป")
                 },
                 use_container_width=True,
                 hide_index=True
             )
+
+            # 🟢 3. เครื่องมือลบรายการบัญชี (Delete Records)
+            st.divider()
+            with st.expander("🗑️ ลบรายการบัญชี (Delete Transaction)", expanded=False):
+                options_list = [
+                    f"ID: {item['id']} | [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
+                    for item in acc_data
+                ]
+                selected_del = st.selectbox("เลือกรายการที่ต้องการลบ:", options_list, key="sel_del_tx")
+
+                col_del1, col_del2 = st.columns([2, 3])
+                with col_del1:
+                    if st.button("❌ ยืนยันลบรายการที่เลือก", type="primary", key="btn_confirm_del_tx"):
+                        selected_tx_id = int(selected_del.split("ID: ")[1].split(" |")[0])
+                        target_row = next((r for r in acc_data if r["id"] == selected_tx_id), None)
+                        
+                        # ลบรูปบน Google Drive ถ้ามี
+                        if target_row and target_row.get("drive_file_id"):
+                            delete_file_from_gdrive(target_row["drive_file_id"])
+
+                        # ลบข้อมูลใน Supabase
+                        supabase.table("accounting_records").delete().eq("id", selected_tx_id).execute()
+                        st.success(f"ลบรายการ ID: {selected_tx_id} และรูปสลิปเรียบร้อยแล้ว!")
+                        st.rerun()
+
         else:
             st.info("ยังไม่มีรายการบัญชีในระบบ")
     except Exception as e:
-        st.info("💡 พร้อมใช้งาน: สร้างตาราง `accounting_records` ใน Supabase แล้วเริ่มบันทึกรายการได้ทันทีครับ")
+        st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
