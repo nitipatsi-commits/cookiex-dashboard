@@ -269,37 +269,32 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
     st.title("💰 ระบบบันทึกรายรับ-รายจ่าย & บัญชีร้าน")
     st.caption("ระบบจัดการการเงินครบวงจร บันทึกบัญชี แนบสลิปผ่าน Supabase Storage สรุปกราฟ และส่งออกข้อมูล")
 
-def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
-    """บีบอัดรูปสลิปให้เหลือ 50-80 KB ก่อนอัปโหลด ช่วยประหยัดพื้นที่ได้ถึง 95%"""
-    try:
-        # เปิดรูปและปรับขนาดความกว้างไม่เกิน 1000px (ชัดพอสำหรับสลิป)
-        img = Image.open(io.BytesIO(file_bytes))
-        if img.mode in ("RGBA", "P"):
-            img = img.convert("RGB")
+    # --- ฟังก์ชันช่วยทำงาน (Helper Functions) ---
+    def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
+        try:
+            img = Image.open(io.BytesIO(file_bytes))
+            if img.mode in ("RGBA", "P"):
+                img = img.convert("RGB")
+            img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
+            buffer = io.BytesIO()
+            img.save(buffer, format="JPEG", quality=75, optimize=True)
+            compressed_bytes = buffer.getvalue()
+            final_mime = "image/jpeg"
+            clean_name = filename.rsplit(".", 1)[0] + ".jpg"
+        except Exception:
+            compressed_bytes = file_bytes
+            final_mime = mimetype
+            clean_name = filename
 
-        img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
+        file_path = f"receipts/{clean_name}"
+        supabase.storage.from_("slips").upload(
+            path=file_path,
+            file=compressed_bytes,
+            file_options={"content-type": final_mime}
+        )
+        public_url = supabase.storage.from_("slips").get_public_url(file_path)
+        return {"id": file_path, "webViewLink": public_url}
 
-        # บีบอัดคุณภาพรูปที่ 75%
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=75, optimize=True)
-        compressed_bytes = buffer.getvalue()
-        final_mime = "image/jpeg"
-        clean_name = filename.rsplit(".", 1)[0] + ".jpg"
-    except Exception:
-        compressed_bytes = file_bytes
-        final_mime = mimetype
-        clean_name = filename
-
-    file_path = f"receipts/{clean_name}"
-    supabase.storage.from_("slips").upload(
-        path=file_path,
-        file=compressed_bytes,
-        file_options={"content-type": final_mime}
-    )
-    public_url = supabase.storage.from_("slips").get_public_url(file_path)
-    return {"id": file_path, "webViewLink": public_url}
-
-    # ฟังก์ชันลบสลิปออกจาก Supabase Storage
     def delete_slip_from_supabase(file_path):
         if not file_path:
             return
@@ -308,14 +303,13 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
         except Exception:
             pass
 
-    # ฟังก์ชันส่งแจ้งเตือนเข้า Discord
     def send_discord_accounting_alert(tx_type, amount, category, note, slip_url=""):
         webhook_url = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
         if not webhook_url:
             return
         try:
             is_income = "income" in tx_type.lower() or "รายรับ" in tx_type
-            color = 5763719 if is_income else 15548997  # เขียว / แดง
+            color = 5763719 if is_income else 15548997
             title = "🟢 บันทึกรายรับใหม่" if is_income else "🔴 บันทึกรายจ่ายใหม่"
             
             fields = [
@@ -339,9 +333,9 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
             pass
 
     # ==========================================
-    # 1. ฟอร์มเพิ่มรายการใหม่
+    # 1. ฟอร์มเพิ่มรายการใหม่ (แสดงทันที)
     # ==========================================
-    with st.expander("➕ เพิ่มรายการรายรับ / รายจ่ายใหม่", expanded=False):
+    with st.expander("➕ เพิ่มรายการรายรับ / รายจ่ายใหม่", expanded=True):
         with st.form("accounting_form", clear_on_submit=True):
             col_t1, col_t2 = st.columns(2)
             with col_t1:
@@ -422,7 +416,7 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
             df_all["created_at"] = pd.to_datetime(df_all["created_at"])
             df_all["date_only"] = df_all["created_at"].dt.date
 
-            # --- ตัวกรอง (Filters) ---
+            # --- ตัวกรอง ---
             f_col1, f_col2, f_col3 = st.columns([1.5, 1.5, 2])
             with f_col1:
                 filter_period = st.selectbox("📅 ช่วงเวลา:", ["ทั้งหมด", "เดือนนี้ (This Month)", "เดือนที่แล้ว", "กำหนดช่วงวันที่เอง"])
@@ -434,7 +428,6 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
             with f_col3:
                 search_kw = st.text_input("🔍 ค้นหา (ชื่อลูกค้า / หมายเหตุ):", placeholder="พิมพ์คำค้นหา...")
 
-            # คำนวณช่วงวันที่
             today = datetime.now().date()
             if filter_period == "เดือนนี้ (This Month)":
                 df_filtered = df_all[(df_all["created_at"].dt.year == today.year) & (df_all["created_at"].dt.month == today.month)]
@@ -451,13 +444,11 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
             else:
                 df_filtered = df_all
 
-            # กรองตามหมวดหมู่และคำค้นหา
             if filter_cat != "ทั้งหมด":
                 df_filtered = df_filtered[df_filtered["category"] == filter_cat]
             if search_kw.strip():
                 df_filtered = df_filtered[df_filtered["note"].fillna("").str.contains(search_kw.strip(), case=False)]
 
-            # แสดงตัวเลขสรุปยอด
             total_income = df_filtered[df_filtered["type"] == "income"]["amount"].sum()
             total_expense = df_filtered[df_filtered["type"] == "expense"]["amount"].sum()
             net_profit = total_income - total_expense
@@ -468,7 +459,7 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
             m3.metric("💵 กำไรสุทธิ (Net)", f"฿ {net_profit:,.2f}", delta=f"{net_profit:,.2f}")
             m4.metric("📑 จำนวนรายการ", f"{len(df_filtered):,} รายการ")
 
-            # กราฟสรุปยอด (แสดงบนหน้าเว็บทันที)
+            # กราฟสรุปยอด
             if not df_filtered.empty:
                 st.write("#### 📈 กราฟแนวโน้มรายรับ - รายจ่าย")
                 chart_df = df_filtered.copy()
@@ -477,7 +468,6 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
                 if "income" not in pivot_chart.columns: pivot_chart["income"] = 0
                 if "expense" not in pivot_chart.columns: pivot_chart["expense"] = 0
                 pivot_chart = pivot_chart.rename(columns={"income": "รายรับ (Income)", "expense": "รายจ่าย (Expense)"})
-                # จัดเรียงตามวันที่จากเก่าไปใหม่
                 pivot_chart = pivot_chart.sort_index()
                 st.bar_chart(pivot_chart, color=["#22c55e", "#ef4444"], use_container_width=True)
 
@@ -517,7 +507,6 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
             # ==========================================
             tab_edit, tab_delete = st.tabs(["✏️ แก้ไขรายการ (Edit)", "🗑️ ลบรายการ (Delete)"])
 
-            # --- แท็บแก้ไข ---
             with tab_edit:
                 options_list = [
                     f"ID: {item['id']} | [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
@@ -592,7 +581,6 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
                                 except Exception as err:
                                     st.error(f"อัปเดตข้อมูลไม่สำเร็จ: {err}")
 
-            # --- แท็บลบ ---
             with tab_delete:
                 del_options = [
                     f"ID: {item['id']} | [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
