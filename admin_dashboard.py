@@ -195,7 +195,7 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
 # ---------------------------------------------------------
-# 🔑 TAB: จัดการ KEY MANAGER (แก้ไขปัญหา Timezone + วัน/ชม./นาที + ตารางครบ)
+# 🔑 TAB: จัดการ KEY MANAGER (แก้ไขชื่อคอลัมน์ expire_date ตรงกับฐานข้อมูล)
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
@@ -207,7 +207,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         chars = string.ascii_uppercase + string.digits
         return "".join(random.choice(chars) for _ in range(length))
 
-    # ฟังก์ชันช่วยแปลงเวลาเป็นเวลาไทยแบบปลอดภัย
     def safe_format_thai_time(ts_val):
         if not ts_val or pd.isna(ts_val):
             return "ตลอดชีพ"
@@ -226,9 +225,9 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         deleted_count = 0
         purge_threshold = now_utc - timedelta(hours=12)
 
-        # เคลียร์คีย์หมดอายุเกิน 12 ชม. อัตโนมัติ
+        # ตรวจสอบและลบคีย์หมดอายุเกิน 12 ชม. อัตโนมัติ
         for k in raw_licenses:
-            exp_str = k.get("expires_at")
+            exp_str = k.get("expire_date") or k.get("expires_at")
             is_purged = False
             if exp_str:
                 try:
@@ -248,7 +247,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
         df_keys = pd.DataFrame(valid_licenses) if valid_licenses else pd.DataFrame()
 
-        # ป้องกัน KeyError โดยการเติมคอลัมน์เริ่มต้นให้ครบ
+        # กำหนด Schema เริ่มต้นป้องกันข้อผิดพลาด
         default_schema = {
             "license_key": "",
             "tier": "Normal",
@@ -256,14 +255,17 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             "status": "active",
             "note": "",
             "hwid": "",
-            "expires_at": None,
+            "expire_date": None,
             "created_at": None
         }
         for col_name, def_val in default_schema.items():
             if col_name not in df_keys.columns:
                 df_keys[col_name] = def_val
 
-        # คำนวณสถานะและเวลาคงเหลือ
+        # ซิงค์ค่า expire_date กับ expires_at
+        if "expires_at" in df_keys.columns:
+            df_keys["expire_date"] = df_keys["expire_date"].fillna(df_keys["expires_at"])
+
         active_count = 0
         expired_grace_count = 0
         suspended_count = 0
@@ -271,7 +273,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         if not df_keys.empty:
             def calculate_key_status(row):
                 st_val = str(row.get("status") or "active").lower()
-                exp_val = row.get("expires_at")
+                exp_val = row.get("expire_date")
 
                 if st_val == "suspended":
                     return "🔴 ระงับการใช้งาน", "ถูกระงับ"
@@ -308,7 +310,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             expired_grace_count = len(df_keys[df_keys["สถานะระบบ"].str.contains("⏳")])
             suspended_count = len(df_keys[df_keys["สถานะระบบ"].str.contains("🔴")])
 
-        # สรุปตัวเลขสถิติ 4 กล่อง
+        # กล่องสถิติ 4 ช่อง
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("🔑 คีย์ทั้งหมด", f"{len(df_keys):,} คีย์")
         m2.metric("🟢 พร้อมใช้งาน", f"{active_count:,} คีย์")
@@ -350,8 +352,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 if filter_tr != "ทั้งหมด":
                     df_disp = df_disp[df_disp["tier"] == filter_tr]
 
-                # แปลงวันหมดอายุแบบปลอดภัย
-                df_disp["วันหมดอายุ"] = df_disp["expires_at"].apply(safe_format_thai_time)
+                df_disp["วันหมดอายุ"] = df_disp["expire_date"].apply(safe_format_thai_time)
 
                 display_columns = ["license_key", "สถานะระบบ", "เวลาคงเหลือ", "tier", "max_concurrent", "วันหมดอายุ", "hwid", "note"]
                 valid_cols = [c for c in display_columns if c in df_disp.columns]
@@ -389,7 +390,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         with b1:
                             if st.button("⚡ ต่ออายุ 30 วัน", key=f"btn_rn_{k_code}"):
                                 new_exp = now_utc + timedelta(days=30)
-                                supabase.table("licenses").update({"expires_at": new_exp.isoformat(), "status": "active"}).eq("license_key", k_code).execute()
+                                supabase.table("licenses").update({"expire_date": new_exp.isoformat(), "status": "active"}).eq("license_key", k_code).execute()
                                 st.success(f"ต่ออายุคีย์ `{k_code}` สำเร็จ!")
                                 st.rerun()
                         with b2:
@@ -401,7 +402,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             else:
                 st.success("🎉 ไม่มีคีย์ที่หมดอายุค้างอยู่ในช่วง 12 ชั่วโมง")
 
-        # --- TAB 3: สร้างคีย์ใหม่ (ระบุ วัน/ชม./นาที) ---
+        # --- TAB 3: สร้างคีย์ใหม่ ---
         with tab_add:
             with st.form("add_license_form_v2", clear_on_submit=True):
                 col_k1, col_k2 = st.columns(2)
@@ -441,7 +442,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         "max_concurrent": int(max_sessions),
                         "tier": tier_type,
                         "note": customer_note.strip(),
-                        "expires_at": exp_str,
+                        "expire_date": exp_str,
                         "status": "active"
                     }
 
@@ -452,7 +453,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     except Exception as err:
                         st.error(f"สร้างคีย์ไม่สำเร็จ: {err}")
 
-        # --- TAB 4: จัดการ / แก้ไข / เพิ่มเวลาเป็น วัน-ชม.-นาที ---
+        # --- TAB 4: จัดการ / แก้ไข / เพิ่มเวลา ---
         with tab_manage:
             if valid_licenses:
                 key_options = [
@@ -503,13 +504,14 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                                 added_delta = timedelta(days=add_days, hours=add_hours, minutes=add_mins)
                                 if added_delta.total_seconds() > 0:
+                                    current_exp = target_obj.get("expire_date") or target_obj.get("expires_at")
                                     try:
-                                        base_exp = pd.to_datetime(target_obj.get("expires_at"), utc=True)
+                                        base_exp = pd.to_datetime(current_exp, utc=True)
                                         if pd.isna(base_exp) or base_exp < now_utc:
                                             base_exp = now_utc
-                                        update_data["expires_at"] = (base_exp + added_delta).isoformat()
+                                        update_data["expire_date"] = (base_exp + added_delta).isoformat()
                                     except Exception:
-                                        update_data["expires_at"] = (now_utc + added_delta).isoformat()
+                                        update_data["expire_date"] = (now_utc + added_delta).isoformat()
 
                                 supabase.table("licenses").update(update_data).eq("license_key", target_code).execute()
                                 st.success(f"อัปเดตคีย์ `{target_code}` เรียบร้อยแล้ว!")
