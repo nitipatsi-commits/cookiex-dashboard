@@ -195,143 +195,204 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
 # ---------------------------------------------------------
-# 🔑 TAB: จัดการ KEY MANAGER (LICENSE KEY MANAGER)
+# 🔑 TAB: จัดการ KEY MANAGER (ระบบแยกหมวดหมู่ + ผ่อนผัน 12 ชม. ลบอัตโนมัติ)
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
-    st.caption("ระบบเพิ่ม เพิ่ม/ลดเวลา ปรับยศสิทธิ์ (Normal/Premier) กำหนดจำนวนโควตาจอ และจัดการคีย์ลูกค้า")
+    st.caption("ระบบจัดการคีย์ลูกค้า แยกหมวดหมู่ใช้งาน / หมดอายุ พร้อมระบบลบคีย์หมดอายุเกิน 12 ชม. อัตโนมัติ")
+
+    now_utc = datetime.now(timezone.utc)
 
     # ฟังก์ชันสุ่มสร้าง License Key
-    def generate_random_key(length=12):
+    def generate_random_key(length=16):
         chars = string.ascii_uppercase + string.digits
         return "".join(random.choice(chars) for _ in range(length))
 
     # ==========================================
-    # 1. ฟอร์มเพิ่มคีย์ใหม่ (Add New License)
-    # ==========================================
-    with st.expander("➕ เพิ่มคีย์ใหม่ (Add New License)", expanded=False):
-        with st.form("add_license_form", clear_on_submit=True):
-            col_k1, col_k2 = st.columns(2)
-            with col_k1:
-                custom_key = st.text_input("🔑 รหัส License Key (เว้นว่างไว้เพื่อให้ระบบสุ่มให้อัตโนมัติ):", placeholder="เช่น PRO-XXXX-YYYY")
-                days_to_add = st.number_input("⏳ จำนวนวันที่ใช้งานได้ (วัน):", min_value=1, value=30, step=1)
-                max_sessions = st.number_input("💻 จำนวนจอที่อนุญาตให้เปิดพร้อมกัน (Max Sessions):", min_value=1, value=1, step=1)
-
-            with col_k2:
-                tier_type = st.selectbox("⭐ ระดับสิทธิ์ (Tier):", ["Normal", "Premier", "VIP"])
-                customer_note = st.text_area("📝 ข้อมูลลูกค้า / บันทึก (Customer / Note):", placeholder="เช่น King Sky (DC) / ซื้อ 1 เดือน", height=68)
-
-            submit_add_key = st.form_submit_button("✨ สร้าง License Key ใหม่")
-
-            if submit_add_key:
-                final_key = custom_key.strip() if custom_key.strip() else generate_random_key(16)
-                expire_time = datetime.now(timezone.utc) + timedelta(days=days_to_add)
-
-                key_payload = {
-                    "license_key": final_key,
-                    "max_concurrent": int(max_sessions),
-                    "tier": tier_type,
-                    "note": customer_note.strip(),
-                    "expires_at": expire_time.isoformat(),
-                    "status": "active",
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                }
-
-                try:
-                    supabase.table("licenses").insert(key_payload).execute()
-                    st.success(f"🎉 สร้างคีย์ `{final_key}` สำเร็จ! (หมดอายุ: {expire_time.strftime('%Y-%m-%d %H:%M')})")
-                    st.rerun()
-                except Exception as err:
-                    st.error(f"สร้างคีย์ไม่สำเร็จ: {err}")
-
-    st.divider()
-
-    # ==========================================
-    # 2. ตารางแสดงรายการคีย์ & สรุปข้อมูล
+    # 1. ดึงข้อมูลคีย์ & ลบคีย์ที่หมดอายุเกิน 12 ชม. อัตโนมัติ (Auto-Purge > 12h)
     # ==========================================
     try:
         res_keys = supabase.table("licenses").select("*").execute()
-        licenses_data = res_keys.data or []
+        raw_licenses = res_keys.data or []
 
-        if licenses_data:
-            df_keys = pd.DataFrame(licenses_data)
-            # เรียงลำดับใน Python แทน
-            if "created_at" in df_keys.columns:
-                df_keys = df_keys.sort_values(by="created_at", ascending=False)
-            elif "id" in df_keys.columns:
-                df_keys = df_keys.sort_values(by="id", ascending=False)
+        # กรองและลบคีย์ที่หมดอายุเกิน 12 ชั่วโมงทันที
+        valid_licenses = []
+        deleted_count = 0
+        purge_threshold = now_utc - timedelta(hours=12)
 
-        if licenses_data:
-            df_keys = pd.DataFrame(licenses_data)
+        for k in raw_licenses:
+            exp_str = k.get("expires_at")
+            if exp_str:
+                try:
+                    exp_dt = pd.to_datetime(exp_str, utc=True)
+                    # ถ้าหมดอายุเกิน 12 ชม. ให้ลบออกจากระบบ
+                    if exp_dt < purge_threshold:
+                        supabase.table("licenses").delete().eq("license_key", k["license_key"]).execute()
+                        supabase.table("active_sessions").delete().eq("license_key", k["license_key"]).execute()
+                        deleted_count += 1
+                        continue
+                except Exception:
+                    pass
+            valid_licenses.append(k)
 
-            # สรุปสถิติด้านบน
-            total_keys = len(df_keys)
-            active_keys = len(df_keys[df_keys.get("status", "active") == "active"]) if "status" in df_keys.columns else total_keys
-            total_screens = df_keys["max_concurrent"].sum() if "max_concurrent" in df_keys.columns else 0
+        if deleted_count > 0:
+            st.toast(f"🧹 ระบบเคลียร์คีย์ที่หมดอายุเกิน 12 ชม. อัตโนมัติ {deleted_count} รายการ", icon="🗑️")
+
+        df_keys = pd.DataFrame(valid_licenses) if valid_licenses else pd.DataFrame()
+
+        # แปลงเวลาเพื่อใช้คำนวณแยกหมวดหมู่
+        if not df_keys.empty and "expires_at" in df_keys.columns:
+            df_keys["exp_dt"] = pd.to_datetime(df_keys["expires_at"], utc=True)
             
-            m1, m2, m3 = st.columns(3)
-            m1.metric("🔑 จำนวนคีย์ทั้งหมด", f"{total_keys:,} คีย์")
-            m2.metric("🟢 คีย์ที่พร้อมใช้งาน", f"{active_keys:,} คีย์")
-            m3.metric("💻 โควตาจอรวมทั้งหมด", f"{total_screens:,} จอ")
+            # แยกกลุ่ม: กำลังใช้งาน (Active) vs หมดอายุไม่เกิน 12 ชม. (Grace Period)
+            df_active = df_keys[df_keys["exp_dt"] >= now_utc].copy()
+            df_expired_grace = df_keys[df_keys["exp_dt"] < now_utc].copy()
+        else:
+            df_active = pd.DataFrame()
+            df_expired_grace = pd.DataFrame()
 
-            st.write("")
+        # ==========================================
+        # 2. สรุปสถิติ 3 การ์ด
+        # ==========================================
+        m1, m2, m3 = st.columns(3)
+        m1.metric("🟢 คีย์พร้อมใช้งาน", f"{len(df_active):,} คีย์")
+        m2.metric("⏳ หมดอายุ (รอเคลียร์ใน 12 ชม.)", f"{len(df_expired_grace):,} คีย์", delta=f"{len(df_expired_grace)} รอลบ" if len(df_expired_grace) > 0 else None, delta_color="inverse")
+        total_screens = df_active["max_concurrent"].sum() if ("max_concurrent" in df_active.columns and not df_active.empty) else 0
+        m3.metric("💻 โควตาจอใช้งานจริง", f"{total_screens:,} จอ")
 
-            # ตัวกรองค้นหา
-            search_col1, search_col2 = st.columns([2, 1])
-            with search_col1:
-                search_key = st.text_input("🔍 ค้นหาคีย์ / ชื่อลูกค้า:", placeholder="พิมพ์ค้นหา...")
-            with search_col2:
-                tier_filter = st.selectbox("⭐ กรองระดับสิทธิ์:", ["ทั้งหมด", "Normal", "Premier", "VIP"])
+        st.write("")
 
-            # ประมวลผลการกรอง
-            filtered_keys = df_keys.copy()
-            if search_key.strip():
-                match_key = filtered_keys["license_key"].fillna("").str.contains(search_key.strip(), case=False)
-                match_note = filtered_keys["note"].fillna("").str.contains(search_key.strip(), case=False) if "note" in filtered_keys.columns else False
-                filtered_keys = filtered_keys[match_key | match_note]
-            
-            if tier_filter != "ทั้งหมด" and "tier" in filtered_keys.columns:
-                filtered_keys = filtered_keys[filtered_keys["tier"] == tier_filter]
+        # ==========================================
+        # 3. แยกหมวดหมู่แสดงผลด้วย Tabs
+        # ==========================================
+        tab_act, tab_exp, tab_add, tab_tool = st.tabs([
+            f"🟢 คีย์ใช้งานปกติ ({len(df_active)})",
+            f"⏳ คีย์หมดอายุ (ผ่อนผัน 12 ชม.) ({len(df_expired_grace)})",
+            "➕ เพิ่มคีย์ใหม่ (Add Key)",
+            "⚙️ แก้ไข / จัดการคีย์ (Manage)"
+        ])
 
-            # จัดรูปแบบวันที่
-            if "expires_at" in filtered_keys.columns:
-                filtered_keys["วันหมดอายุ"] = pd.to_datetime(filtered_keys["expires_at"]).dt.strftime("%Y-%m-%d %H:%M")
-            if "created_at" in filtered_keys.columns:
-                filtered_keys["วันที่สร้าง"] = pd.to_datetime(filtered_keys["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
+        # --- TAB 1: คีย์ที่ยังใช้งานได้ ---
+        with tab_act:
+            if not df_active.empty:
+                # ตัวค้นหา
+                sc1, sc2 = st.columns([2, 1])
+                with sc1:
+                    q_act = st.text_input("🔍 ค้นหาคีย์ใช้งานปกติ:", placeholder="พิมพ์คีย์ หรือ ชื่อลูกค้า...", key="q_act")
+                with sc2:
+                    tier_act = st.selectbox("⭐ กรองระดับ:", ["ทั้งหมด", "Normal", "Premier", "VIP"], key="tier_act")
 
-            display_cols = [c for c in ["id", "license_key", "tier", "max_concurrent", "วันหมดอายุ", "status", "hwid", "note"] if c in filtered_keys.columns]
+                disp_act = df_active.copy()
+                if q_act.strip():
+                    m_k = disp_act["license_key"].fillna("").str.contains(q_act.strip(), case=False)
+                    m_n = disp_act["note"].fillna("").str.contains(q_act.strip(), case=False) if "note" in disp_act.columns else False
+                    disp_act = disp_act[m_k | m_n]
+                if tier_act != "ทั้งหมด" and "tier" in disp_act.columns:
+                    disp_act = disp_act[disp_act["tier"] == tier_act]
 
-            st.dataframe(
-                filtered_keys[display_cols],
-                column_config={
-                    "license_key": st.column_config.TextColumn("🔑 License Key"),
-                    "tier": st.column_config.TextColumn("ระดับ (Tier)"),
-                    "max_concurrent": st.column_config.NumberColumn("จำนวนจอ", format="%d จอ"),
-                    "status": st.column_config.TextColumn("สถานะ"),
-                    "note": st.column_config.TextColumn("ลูกค้า / บันทึก (Note)")
-                },
-                use_container_width=True,
-                hide_index=True
-            )
+                disp_act["วันหมดอายุ"] = disp_act["exp_dt"].dt.tz_convert('Asia/Bangkok').dt.strftime("%Y-%m-%d %H:%M")
+                cols = [c for c in ["id", "license_key", "tier", "max_concurrent", "วันหมดอายุ", "status", "hwid", "note"] if c in disp_act.columns]
 
-            st.divider()
+                st.dataframe(
+                    disp_act[cols],
+                    column_config={
+                        "license_key": st.column_config.TextColumn("🔑 License Key"),
+                        "tier": st.column_config.TextColumn("ระดับ"),
+                        "max_concurrent": st.column_config.NumberColumn("โควตาจอ", format="%d จอ"),
+                        "status": st.column_config.TextColumn("สถานะ"),
+                        "note": st.column_config.TextColumn("ลูกค้า / หมายเหตุ")
+                    },
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.info("ไม่มีคีย์ที่กำลังใช้งานในขณะนี้")
 
-            # ==========================================
-            # 3. เครื่องมือจัดการคีย์ (แก้ไข / ต่อเวลา / รีเซ็ต HWID / ลบ)
-            # ==========================================
-            st.subheader("⚙️ จัดการ License Key")
-            tab_manage, tab_del_key = st.tabs(["✏️ แก้ไข / ต่อเวลา / ปลดล็อค HWID", "🗑️ ลบคีย์"])
+        # --- TAB 2: คีย์หมดอายุ (รอเคลียร์ใน 12 ชม.) ---
+        with tab_exp:
+            if not df_expired_grace.empty:
+                st.warning("⚠️ คีย์ด้านล่างนี้หมดอายุแล้ว แต่จะถูกเก็บไว้ **12 ชั่วโมง** เพื่อให้โอกาสลูกค้าต่ออายุ ก่อนระบบจะลบทิ้งถาวร")
 
-            with tab_manage:
+                for _, exp_row in df_expired_grace.iterrows():
+                    e_key = exp_row["license_key"]
+                    # คำนวณเวลาที่เหลือจนกว่าจะถูกลบ (12 ชม. หลังหมดอายุ)
+                    del_time = exp_row["exp_dt"] + timedelta(hours=12)
+                    mins_left = int((del_time - now_utc).total_seconds() / 60)
+                    hours_left = mins_left // 60
+                    rem_mins = mins_left % 60
+
+                    c_info, c_action = st.columns([3, 1.5])
+                    with c_info:
+                        st.markdown(f"🔑 **`{e_key}`** | ระดับ: **{exp_row.get('tier','Normal')}** | โควตา: **{exp_row.get('max_concurrent',1)} จอ**")
+                        st.caption(f"📝 {exp_row.get('note','') or 'ไม่มีบันทึก'} | ⏰ หมดอายุเมื่อ: {exp_row['exp_dt'].tz_convert('Asia/Bangkok').strftime('%H:%M น.')} (**จะถูกลบในอีก {hours_left} ชม. {rem_mins} นาที**)")
+
+                    with c_action:
+                        col_r1, col_r2 = st.columns(2)
+                        with col_r1:
+                            if st.button("⚡ ต่ออายุ 30 วัน", key=f"quick_ren_{e_key}"):
+                                new_expiry = now_utc + timedelta(days=30)
+                                supabase.table("licenses").update({
+                                    "expires_at": new_expiry.isoformat(),
+                                    "status": "active"
+                                }).eq("license_key", e_key).execute()
+                                st.success(f"ต่ออายุคีย์ `{e_key}` สำเร็จ!")
+                                st.rerun()
+                        with col_r2:
+                            if st.button("🗑️ ลบทันที", key=f"del_now_{e_key}", type="secondary"):
+                                supabase.table("licenses").delete().eq("license_key", e_key).execute()
+                                supabase.table("active_sessions").delete().eq("license_key", e_key).execute()
+                                st.rerun()
+                    st.write("---")
+            else:
+                st.success("🎉 ไม่มีคีย์ที่หมดอายุค้างอยู่ในช่วง 12 ชั่วโมงนี้")
+
+        # --- TAB 3: เพิ่มคีย์ใหม่ ---
+        with tab_add:
+            with st.form("add_license_form", clear_on_submit=True):
+                col_k1, col_k2 = st.columns(2)
+                with col_k1:
+                    custom_key = st.text_input("🔑 รหัส License Key (เว้นว่างไว้เพื่อสุ่มให้อัตโนมัติ):", placeholder="เช่น PRO-XXXX-YYYY")
+                    days_to_add = st.number_input("⏳ จำนวนวันที่ใช้งานได้ (วัน):", min_value=1, value=30, step=1)
+                    max_sessions = st.number_input("💻 จำนวนจอที่อนุญาต:", min_value=1, value=1, step=1)
+
+                with col_k2:
+                    tier_type = st.selectbox("⭐ ระดับสิทธิ์ (Tier):", ["Normal", "Premier", "VIP"])
+                    customer_note = st.text_area("📝 ข้อมูลลูกค้า / บันทึก:", placeholder="เช่น King Sky (DC) / ซื้อ 1 เดือน", height=68)
+
+                submit_add_key = st.form_submit_button("✨ สร้าง License Key ใหม่")
+
+                if submit_add_key:
+                    final_key = custom_key.strip() if custom_key.strip() else generate_random_key(16)
+                    expire_time = now_utc + timedelta(days=days_to_add)
+
+                    key_payload = {
+                        "license_key": final_key,
+                        "max_concurrent": int(max_sessions),
+                        "tier": tier_type,
+                        "note": customer_note.strip(),
+                        "expires_at": expire_time.isoformat(),
+                        "status": "active"
+                    }
+
+                    try:
+                        supabase.table("licenses").insert(key_payload).execute()
+                        st.success(f"🎉 สร้างคีย์ `{final_key}` สำเร็จ! (หมดอายุ: {expire_time.strftime('%Y-%m-%d %H:%M')})")
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"สร้างคีย์ไม่สำเร็จ: {err}")
+
+        # --- TAB 4: แก้ไข / จัดการคีย์ ---
+        with tab_tool:
+            if valid_licenses:
                 key_options = [
-                    f"{k['license_key']} | [{k.get('tier','Normal')}] จอ: {k.get('max_concurrent',1)} ({k.get('note','') or 'ไม่มีบันทึก'})"
-                    for k in licenses_data
+                    f"{k['license_key']} | [{k.get('tier','Normal')}] ({k.get('note','') or 'ไม่มีบันทึก'})"
+                    for k in valid_licenses
                 ]
                 selected_manage_str = st.selectbox("เลือกคีย์ที่ต้องการจัดการ:", key_options, key="sel_manage_license")
 
                 if selected_manage_str:
                     target_key_code = selected_manage_str.split(" |")[0]
-                    target_key_obj = next((k for k in licenses_data if k["license_key"] == target_key_code), None)
+                    target_key_obj = next((k for k in valid_licenses if k["license_key"] == target_key_code), None)
 
                     if target_key_obj:
                         col_m1, col_m2 = st.columns(2)
@@ -343,46 +404,39 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         with col_m2:
                             st.write("**สถานะ HWID ปัจจุบัน:**")
                             st.code(target_key_obj.get("hwid") or "ยังไม่มีการผูก HWID (ว่าง)")
-                            reset_hwid_flag = st.checkbox("🔓 รีเซ็ต HWID (ปลดล็อคให้ย้ายเครื่อง)")
+                            reset_hwid_flag = st.checkbox("🔓 รีเซ็ต HWID (ปลดล็อคย้ายเครื่อง)")
+                            new_status = st.selectbox("📌 สถานะ:", ["active", "suspended"], index=0 if target_key_obj.get("status") == "active" else 1)
 
-                            current_status = target_key_obj.get("status", "active")
-                            new_status = st.selectbox("📌 สถานะคีย์:", ["active", "suspended", "expired"], index=0 if current_status == "active" else 1)
+                        col_btn1, col_btn2 = st.columns([2, 2])
+                        with col_btn1:
+                            if st.button("💾 บันทึกการแก้ไข", type="primary"):
+                                update_data = {
+                                    "max_concurrent": int(new_max_screens),
+                                    "note": new_note.strip(),
+                                    "status": new_status
+                                }
+                                if reset_hwid_flag:
+                                    update_data["hwid"] = None
 
-                        if st.button("💾 บันทึกการเปลี่ยนแปลงของคีย์", type="primary"):
-                            update_data = {
-                                "max_concurrent": int(new_max_screens),
-                                "note": new_note.strip(),
-                                "status": new_status
-                            }
+                                if add_days > 0:
+                                    try:
+                                        base_exp = pd.to_datetime(target_key_obj.get("expires_at"), utc=True)
+                                        if base_exp < now_utc:
+                                            base_exp = now_utc
+                                        update_data["expires_at"] = (base_exp + timedelta(days=add_days)).isoformat()
+                                    except Exception:
+                                        pass
 
-                            if reset_hwid_flag:
-                                update_data["hwid"] = None
+                                supabase.table("licenses").update(update_data).eq("license_key", target_key_code).execute()
+                                st.success(f"อัปเดตคีย์ `{target_key_code}` เรียบร้อยแล้ว!")
+                                st.rerun()
 
-                            if add_days > 0:
-                                try:
-                                    base_exp = pd.to_datetime(target_key_obj.get("expires_at"))
-                                    if base_exp < pd.Timestamp.now(tz="UTC"):
-                                        base_exp = pd.Timestamp.now(tz="UTC")
-                                    new_exp = base_exp + timedelta(days=add_days)
-                                    update_data["expires_at"] = new_exp.isoformat()
-                                except Exception:
-                                    pass
-
-                            supabase.table("licenses").update(update_data).eq("license_key", target_key_code).execute()
-                            st.success(f"อัปเดตคีย์ `{target_key_code}` สำเร็จแล้ว!")
-                            st.rerun()
-
-            with tab_del_key:
-                del_key_str = st.selectbox("เลือกคีย์ที่ต้องการลบทิ้งถาวร:", key_options, key="sel_del_license_perm")
-                if st.button("❌ ยืนยันลบคีย์นี้ออกจากระบบ", type="primary"):
-                    del_code = del_key_str.split(" |")[0]
-                    supabase.table("licenses").delete().eq("license_key", del_code).execute()
-                    supabase.table("active_sessions").delete().eq("license_key", del_code).execute()
-                    st.success(f"ลบคีย์ `{del_code}` เรียบร้อยแล้ว!")
-                    st.rerun()
-
-        else:
-            st.info("ยังไม่มีข้อมูล License Key ในระบบ สามารถกดเปิดกล่องด้านบนเพื่อเพิ่มคีย์ใหม่ได้ทันที")
+                        with col_btn2:
+                            if st.button("❌ ลบคีย์นี้ทิ้งถาวร"):
+                                supabase.table("licenses").delete().eq("license_key", target_key_code).execute()
+                                supabase.table("active_sessions").delete().eq("license_key", target_key_code).execute()
+                                st.success(f"ลบคีย์ `{target_key_code}` แล้ว!")
+                                st.rerun()
 
     except Exception as e:
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล License: {e}")
