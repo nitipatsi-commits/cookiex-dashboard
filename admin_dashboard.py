@@ -195,7 +195,7 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
 # ---------------------------------------------------------
-# 🔑 TAB: จัดการ KEY MANAGER (ปลอดภัย 100% ป้องกัน Column หาย + วัน/ชม./นาที + ผ่อนผัน 12 ชม.)
+# 🔑 TAB: จัดการ KEY MANAGER (แก้ไขปัญหา Timezone + วัน/ชม./นาที + ตารางครบ)
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
@@ -206,6 +206,16 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
     def generate_random_key(length=16):
         chars = string.ascii_uppercase + string.digits
         return "".join(random.choice(chars) for _ in range(length))
+
+    # ฟังก์ชันช่วยแปลงเวลาเป็นเวลาไทยแบบปลอดภัย
+    def safe_format_thai_time(ts_val):
+        if not ts_val or pd.isna(ts_val):
+            return "ตลอดชีพ"
+        try:
+            dt = pd.to_datetime(ts_val, utc=True)
+            return dt.tz_convert('Asia/Bangkok').strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            return str(ts_val)
 
     try:
         # 1. ดึงข้อมูล License Key ทั้งหมด
@@ -238,7 +248,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
         df_keys = pd.DataFrame(valid_licenses) if valid_licenses else pd.DataFrame()
 
-        # ป้องกัน KeyError โดยการเติมคอลัมน์เริ่มต้นให้ครบหากไม่มีในฐานข้อมูล
+        # ป้องกัน KeyError โดยการเติมคอลัมน์เริ่มต้นให้ครบ
         default_schema = {
             "license_key": "",
             "tier": "Normal",
@@ -340,8 +350,8 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 if filter_tr != "ทั้งหมด":
                     df_disp = df_disp[df_disp["tier"] == filter_tr]
 
-                if "expires_at" in df_disp.columns:
-                    df_disp["วันหมดอายุ"] = pd.to_datetime(df_disp["expires_at"], errors="coerce").dt.tz_convert('Asia/Bangkok').dt.strftime("%Y-%m-%d %H:%M").fillna("ตลอดชีพ")
+                # แปลงวันหมดอายุแบบปลอดภัย
+                df_disp["วันหมดอายุ"] = df_disp["expires_at"].apply(safe_format_thai_time)
 
                 display_columns = ["license_key", "สถานะระบบ", "เวลาคงเหลือ", "tier", "max_concurrent", "วันหมดอายุ", "hwid", "note"]
                 valid_cols = [c for c in display_columns if c in df_disp.columns]
