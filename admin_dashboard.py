@@ -10,9 +10,19 @@ import time
 
 import pandas as pd
 import requests
+import streamlit as st
 from supabase import create_client
 
-# 🟢 ตั้งค่าหน้าเว็บให้รองรับมือถือและจอคอม
+# ไลบรารีสำหรับ Google Drive API (สำรอง)
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+    HAS_GDRIVE = True
+except ImportError:
+    HAS_GDRIVE = False
+
+# 🟢 ตั้งค่าหน้าเว็บ (ต้องอยู่หลัง import streamlit as st เสมอ)
 st.set_page_config(
     page_title="Cookie X - Admin System",
     page_icon="⚡",
