@@ -262,25 +262,29 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
 # ---------------------------------------------------------
-# 💰 TAB 4: บันทึกรายรับ-รายจ่าย & สลิป (GOOGLE DRIVE + DISCORD + EXPORT)
+# 💰 TAB 4: บันทึกรายรับ-รายจ่าย & สลิป (SUPABASE STORAGE + DISCORD + EXPORT)
 # ---------------------------------------------------------
 elif menu == "💰 บันทึกรายรับ-รายจ่าย & สลิป (Accounting)":
     st.title("💰 ระบบบันทึกรายรับ-รายจ่าย & บัญชีร้าน")
-    st.caption("ระบบจัดการการเงินครบวงจร บันทึกบัญชี แนบสลิป Google Drive สรุปกราฟ และส่งออกข้อมูล")
+    st.caption("ระบบจัดการการเงินครบวงจร บันทึกบัญชี แนบสลิปผ่าน Supabase Storage สรุปกราฟ และส่งออกข้อมูล")
 
-    # ฟังก์ชันลบไฟล์สลิปออกจาก Google Drive
-    def delete_file_from_gdrive(file_id):
-        if not file_id:
+    # ฟังก์ชันอัปโหลดสลิปเข้า Supabase Storage
+    def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
+        file_path = f"receipts/{filename}"
+        supabase.storage.from_("slips").upload(
+            path=file_path,
+            file=file_bytes,
+            file_options={"content-type": mimetype}
+        )
+        public_url = supabase.storage.from_("slips").get_public_url(file_path)
+        return {"id": file_path, "webViewLink": public_url}
+
+    # ฟังก์ชันลบสลิปออกจาก Supabase Storage
+    def delete_slip_from_supabase(file_path):
+        if not file_path:
             return
         try:
-            if not HAS_GDRIVE or "gcp_service_account" not in st.secrets:
-                return
-            creds_info = dict(st.secrets["gcp_service_account"])
-            creds = service_account.Credentials.from_service_account_info(
-                creds_info, scopes=["https://www.googleapis.com/auth/drive"]
-            )
-            service = build("drive", "v3", credentials=creds)
-            service.files().delete(fileId=file_id).execute()
+            supabase.storage.from_("slips").remove([file_path])
         except Exception:
             pass
 
@@ -300,7 +304,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                 {"name": "📝 หมายเหตุ / ลูกค้า", "value": note or "-", "inline": False},
             ]
             if slip_url:
-                fields.append({"name": "📎 ลิงก์สลิป Google Drive", "value": f"[คลิกเพื่อดูสลิป]({slip_url})", "inline": False})
+                fields.append({"name": "📎 ลิงก์รูปสลิป", "value": f"[คลิกเพื่อดูสลิป]({slip_url})", "inline": False})
 
             payload = {
                 "embeds": [{
@@ -342,20 +346,20 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                     drive_file_id = ""
 
                     if slip_file is not None:
-                        with st.spinner("⏳ กำลังอัปโหลดสลิปไปยัง Google Drive..."):
+                        with st.spinner("⏳ กำลังอัปโหลดสลิปไปยัง Supabase Storage..."):
                             try:
                                 timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
                                 clean_filename = f"slip_{timestamp_prefix}_{slip_file.name}"
-                                upload_res = upload_slip_to_gdrive(
+                                upload_res = upload_slip_to_supabase(
                                     slip_file.getvalue(),
                                     clean_filename,
                                     mimetype=slip_file.type
                                 )
                                 drive_file_id = upload_res.get("id", "")
                                 slip_url = upload_res.get("webViewLink", "")
-                                st.success("☁️ อัปโหลดสลิปขึ้น Google Drive สำเร็จ!")
+                                st.success("☁️ อัปโหลดสลิปสำเร็จเรียบร้อย!")
                             except Exception as ex:
-                                st.warning(f"⚠️ บันทึกข้อมูลได้ แต่อัปโหลดสลิปไม่สำเร็จ: {ex}")
+                                st.warning(f"⚠️ บันทึกข้อมูลได้ แต่อัปโหลดรูปสลิปไม่สำเร็จ: {ex}")
 
                     combined_note = ""
                     if customer_ref.strip() and extra_note.strip():
@@ -410,7 +414,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             with f_col3:
                 search_kw = st.text_input("🔍 ค้นหา (ชื่อลูกค้า / หมายเหตุ):", placeholder="พิมพ์คำค้นหา...")
 
-            # คำนวณช่วงวันที่ตามตัวเลือก
+            # คำนวณช่วงวันที่
             today = datetime.now().date()
             if filter_period == "เดือนนี้ (This Month)":
                 df_filtered = df_all[(df_all["created_at"].dt.year == today.year) & (df_all["created_at"].dt.month == today.month)]
@@ -420,7 +424,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                 df_filtered = df_all[(df_all["created_at"].dt.year == last_month_end.year) & (df_all["created_at"].dt.month == last_month_end.month)]
             elif filter_period == "กำหนดช่วงวันที่เอง":
                 dr1, dr2 = st.date_input("เลือกช่วงวันที่:", [today - timedelta(days=30), today])
-                if isinstance(dr1, datetime) or isinstance(dr1, date):
+                if isinstance(dr1, (datetime, type(today))):
                     df_filtered = df_all[(df_all["date_only"] >= dr1) & (df_all["date_only"] <= dr2)]
                 else:
                     df_filtered = df_all
@@ -433,7 +437,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             if search_kw.strip():
                 df_filtered = df_filtered[df_filtered["note"].fillna("").str.contains(search_kw.strip(), case=False)]
 
-            # แสดงตัวเลข Metrics สรุปยอด
+            # แสดงตัวเลขสรุปยอด
             total_income = df_filtered[df_filtered["type"] == "income"]["amount"].sum()
             total_expense = df_filtered[df_filtered["type"] == "expense"]["amount"].sum()
             net_profit = total_income - total_expense
@@ -444,7 +448,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             m3.metric("💵 กำไรสุทธิ (Net)", f"฿ {net_profit:,.2f}", delta=f"{net_profit:,.2f}")
             m4.metric("📑 จำนวนรายการ", f"{len(df_filtered):,} รายการ")
 
-            # กราฟสรุปยอดรายรับ-รายจ่ายรายวัน
+            # กราฟสรุปยอด
             if not df_filtered.empty:
                 with st.expander("📈 กราฟแนวโน้มรายรับ - รายจ่าย", expanded=False):
                     chart_df = df_filtered.copy()
@@ -469,13 +473,13 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                 column_config={
                     "id": st.column_config.NumberColumn("ID รายการ", format="%d"),
                     "note": st.column_config.TextColumn("ลูกค้า / หมายเหตุ (Note)"),
-                    "slip_url": st.column_config.LinkColumn("สลิป Google Drive", display_text="📂 เปิดดูรูปสลิป")
+                    "slip_url": st.column_config.LinkColumn("รูปสลิป", display_text="📂 เปิดดูรูปสลิป")
                 },
                 use_container_width=True,
                 hide_index=True
             )
 
-            # ปุ่มส่งออกข้อมูล (Export to CSV)
+            # ปุ่มดาวน์โหลด CSV
             csv_data = df_filtered.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
                 label="📥 ดาวน์โหลดประวัติบัญชี (Export to CSV)",
@@ -491,6 +495,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             # ==========================================
             tab_edit, tab_delete = st.tabs(["✏️ แก้ไขรายการ (Edit)", "🗑️ ลบรายการ (Delete)"])
 
+            # --- แท็บแก้ไข ---
             with tab_edit:
                 options_list = [
                     f"ID: {item['id']} | [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
@@ -531,14 +536,14 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                                 final_drive_id = edit_row.get("drive_file_id", "")
 
                                 if new_slip_file is not None:
-                                    with st.spinner("⏳ กำลังอัปโหลดสลิปใหม่ไปยัง Google Drive..."):
+                                    with st.spinner("⏳ กำลังอัปโหลดรูปใหม่ไปยัง Supabase..."):
                                         try:
                                             if final_drive_id:
-                                                delete_file_from_gdrive(final_drive_id)
+                                                delete_slip_from_supabase(final_drive_id)
 
                                             timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
                                             clean_filename = f"slip_{timestamp_prefix}_{new_slip_file.name}"
-                                            up_res = upload_slip_to_gdrive(
+                                            up_res = upload_slip_to_supabase(
                                                 new_slip_file.getvalue(),
                                                 clean_filename,
                                                 mimetype=new_slip_file.type
@@ -565,6 +570,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                                 except Exception as err:
                                     st.error(f"อัปเดตข้อมูลไม่สำเร็จ: {err}")
 
+            # --- แท็บลบ ---
             with tab_delete:
                 del_options = [
                     f"ID: {item['id']} | [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
@@ -579,7 +585,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                         target_row = next((r for r in acc_data if r["id"] == selected_tx_id), None)
                         
                         if target_row and target_row.get("drive_file_id"):
-                            delete_file_from_gdrive(target_row["drive_file_id"])
+                            delete_slip_from_supabase(target_row["drive_file_id"])
 
                         supabase.table("accounting_records").delete().eq("id", selected_tx_id).execute()
                         st.success(f"ลบรายการ ID: {selected_tx_id} เรียบร้อยแล้ว!")
