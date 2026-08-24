@@ -195,7 +195,7 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
 # ---------------------------------------------------------
-# 🔑 TAB: จัดการ KEY MANAGER (ระบุ วัน/ชม./นาที + ตารางรวม + ผ่อนผัน 12 ชม.)
+# 🔑 TAB: จัดการ KEY MANAGER (ปลอดภัย 100% ป้องกัน Column หาย + วัน/ชม./นาที + ผ่อนผัน 12 ชม.)
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
@@ -238,6 +238,21 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
         df_keys = pd.DataFrame(valid_licenses) if valid_licenses else pd.DataFrame()
 
+        # ป้องกัน KeyError โดยการเติมคอลัมน์เริ่มต้นให้ครบหากไม่มีในฐานข้อมูล
+        default_schema = {
+            "license_key": "",
+            "tier": "Normal",
+            "max_concurrent": 1,
+            "status": "active",
+            "note": "",
+            "hwid": "",
+            "expires_at": None,
+            "created_at": None
+        }
+        for col_name, def_val in default_schema.items():
+            if col_name not in df_keys.columns:
+                df_keys[col_name] = def_val
+
         # คำนวณสถานะและเวลาคงเหลือ
         active_count = 0
         expired_grace_count = 0
@@ -245,7 +260,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
         if not df_keys.empty:
             def calculate_key_status(row):
-                st_val = str(row.get("status", "active")).lower()
+                st_val = str(row.get("status") or "active").lower()
                 exp_val = row.get("expires_at")
 
                 if st_val == "suspended":
@@ -308,14 +323,15 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 with f2:
                     filter_st = st.selectbox("📌 กรองสถานะ:", ["ทั้งหมด", "🟢 กำลังใช้งาน", "⏳ หมดอายุ (ผ่อนผัน)", "🔴 ระงับการใช้งาน"], key="f_st_keys")
                 with f3:
-                    filter_tr = st.selectbox("⭐ ระดับ (Tier):", ["ทั้งหมด"] + sorted(list(df_keys["tier"].dropna().unique())), key="f_tr_keys")
+                    tier_list = ["ทั้งหมด"] + sorted(list(df_keys["tier"].dropna().astype(str).unique()))
+                    filter_tr = st.selectbox("⭐ ระดับ (Tier):", tier_list, key="f_tr_keys")
 
                 df_disp = df_keys.copy()
 
                 if search_txt.strip():
-                    m1 = df_disp["license_key"].fillna("").str.contains(search_txt.strip(), case=False)
-                    m2 = df_disp["note"].fillna("").str.contains(search_txt.strip(), case=False) if "note" in df_disp.columns else False
-                    m3 = df_disp["hwid"].fillna("").str.contains(search_txt.strip(), case=False) if "hwid" in df_disp.columns else False
+                    m1 = df_disp["license_key"].fillna("").astype(str).str.contains(search_txt.strip(), case=False)
+                    m2 = df_disp["note"].fillna("").astype(str).str.contains(search_txt.strip(), case=False)
+                    m3 = df_disp["hwid"].fillna("").astype(str).str.contains(search_txt.strip(), case=False)
                     df_disp = df_disp[m1 | m2 | m3]
 
                 if filter_st != "ทั้งหมด":
@@ -394,7 +410,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                 with col_k2:
                     tier_type = st.selectbox("⭐ ระดับสิทธิ์ (Tier):", ["Normal", "Premier", "VIP"])
-                    customer_note = st.text_area("📝 ข้อมูลลูกค้า / บันทึก:", placeholder="เช่น King Sky (DC) / ทดสอบบอท 2 ชม.", height=110)
+                    customer_note = st.text_area("📝 ข้อมูลลูกค้า / บันทึก:", placeholder="เช่น King Sky (DC) / ซื้อ 1 เดือน", height=110)
 
                 submit_add_key = st.form_submit_button("✨ สร้าง License Key ใหม่")
 
@@ -402,7 +418,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     final_key = custom_key.strip() if custom_key.strip() else generate_random_key(16)
                     total_delta = timedelta(days=days_input, hours=hours_input, minutes=mins_input)
                     
-                    # ถ้าตั้ง 0 วัน 0 ชม. 0 นาที ให้ถือเป็นคีย์ตลอดชีพ (None)
                     if total_delta.total_seconds() > 0:
                         expire_time = now_utc + total_delta
                         exp_str = expire_time.isoformat()
@@ -443,7 +458,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     if target_obj:
                         col_m1, col_m2 = st.columns(2)
                         with col_m1:
-                            new_max_screens = st.number_input("💻 ปรับจำนวนจอ:", min_value=1, value=int(target_obj.get("max_concurrent", 1)), step=1)
+                            new_max_screens = st.number_input("💻 ปรับจำนวนจอ:", min_value=1, value=int(target_obj.get("max_concurrent") or 1), step=1)
                             
                             st.write("**⏳ เพิ่มเวลาการใช้งาน (+วัน/+ชม./+นาที):**")
                             ad_d, ad_h, ad_m = st.columns(3)
@@ -461,7 +476,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                             st.code(target_obj.get("hwid") or "ยังไม่มีการผูก HWID (ว่าง)")
                             reset_hwid_flag = st.checkbox("🔓 รีเซ็ต HWID (ปลดล็อคย้ายเครื่อง)")
 
-                            curr_st = str(target_obj.get("status", "active")).lower()
+                            curr_st = str(target_obj.get("status") or "active").lower()
                             st_idx = 0 if curr_st == "active" else (1 if curr_st == "suspended" else 0)
                             new_status = st.selectbox("📌 สถานะ:", ["active", "suspended"], index=st_idx)
 
