@@ -1,27 +1,16 @@
 import base64
+from datetime import date, datetime, timedelta, timezone
 import io
 import os
+from PIL import Image
 import random
 import string
 import threading
 import time
-from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import requests
-import streamlit as st
 from supabase import create_client
-
-# ฟังก์ชันอัปโหลดสลิปเข้า Supabase Storage
-from PIL import Image
-# ไลบรารีสำหรับ Google Drive API
-try:
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload
-    HAS_GDRIVE = True
-except ImportError:
-    HAS_GDRIVE = False
 
 # 🟢 ตั้งค่าหน้าเว็บให้รองรับมือถือและจอคอม
 st.set_page_config(
