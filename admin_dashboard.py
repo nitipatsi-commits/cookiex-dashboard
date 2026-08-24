@@ -469,16 +469,18 @@ def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
             m3.metric("💵 กำไรสุทธิ (Net)", f"฿ {net_profit:,.2f}", delta=f"{net_profit:,.2f}")
             m4.metric("📑 จำนวนรายการ", f"{len(df_filtered):,} รายการ")
 
-            # กราฟสรุปยอด
+            # กราฟสรุปยอด (แสดงบนหน้าเว็บทันที)
             if not df_filtered.empty:
-                with st.expander("📈 กราฟแนวโน้มรายรับ - รายจ่าย", expanded=False):
-                    chart_df = df_filtered.copy()
-                    chart_df["date_str"] = chart_df["created_at"].dt.strftime("%Y-%m-%d")
-                    pivot_chart = chart_df.pivot_table(index="date_str", columns="type", values="amount", aggfunc="sum", fill_value=0)
-                    if "income" not in pivot_chart.columns: pivot_chart["income"] = 0
-                    if "expense" not in pivot_chart.columns: pivot_chart["expense"] = 0
-                    pivot_chart = pivot_chart.rename(columns={"income": "รายรับ (Income)", "expense": "รายจ่าย (Expense)"})
-                    st.bar_chart(pivot_chart, color=["#22c55e", "#ef4444"])
+                st.write("#### 📈 กราฟแนวโน้มรายรับ - รายจ่าย")
+                chart_df = df_filtered.copy()
+                chart_df["date_str"] = chart_df["created_at"].dt.strftime("%Y-%m-%d")
+                pivot_chart = chart_df.pivot_table(index="date_str", columns="type", values="amount", aggfunc="sum", fill_value=0)
+                if "income" not in pivot_chart.columns: pivot_chart["income"] = 0
+                if "expense" not in pivot_chart.columns: pivot_chart["expense"] = 0
+                pivot_chart = pivot_chart.rename(columns={"income": "รายรับ (Income)", "expense": "รายจ่าย (Expense)"})
+                # จัดเรียงตามวันที่จากเก่าไปใหม่
+                pivot_chart = pivot_chart.sort_index()
+                st.bar_chart(pivot_chart, color=["#22c55e", "#ef4444"], use_container_width=True)
 
             # ตารางแสดงข้อมูล
             df_display = df_filtered.copy()
