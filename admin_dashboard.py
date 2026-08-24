@@ -263,13 +263,13 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
 # ---------------------------------------------------------
-# 💰 TAB 4: บันทึกรายรับ-รายจ่าย & สลิป (SUPABASE STORAGE + DISCORD + EXPORT)
+# 💰 TAB 4: บันทึกรายรับ-รายจ่าย & สลิป (ระบบรอยืนยัน + DISCORD + EXPORT)
 # ---------------------------------------------------------
 elif menu == "💰 บันทึกรายรับ-รายจ่าย & สลิป (Accounting)":
     st.title("💰 ระบบบันทึกรายรับ-รายจ่าย & บัญชีร้าน")
-    st.caption("ระบบจัดการการเงินครบวงจร บันทึกบัญชี แนบสลิปผ่าน Supabase Storage สรุปกราฟ และส่งออกข้อมูล")
+    st.caption("ระบบจัดการการเงินครบวงจร บันทึกบัญชี แนบสลิป อนุมัติรายการรอยืนยัน สรุปกราฟ และส่งออกข้อมูล")
 
-    # --- ฟังก์ชันช่วยทำงาน (Helper Functions) ---
+    # --- ฟังก์ชันช่วยทำงาน ---
     def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
         try:
             img = Image.open(io.BytesIO(file_bytes))
@@ -303,18 +303,25 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
         except Exception:
             pass
 
-    def send_discord_accounting_alert(tx_type, amount, category, note, slip_url=""):
+    def send_discord_accounting_alert(tx_type, amount, category, note, status_text, slip_url=""):
         webhook_url = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
         if not webhook_url:
             return
         try:
             is_income = "income" in tx_type.lower() or "รายรับ" in tx_type
-            color = 5763719 if is_income else 15548997
-            title = "🟢 บันทึกรายรับใหม่" if is_income else "🔴 บันทึกรายจ่ายใหม่"
+            if status_text == "pending":
+                color = 16763904  # สีส้ม/เหลือง
+                status_badge = "⏳ รอยืนยัน / รอตรวจสอบ"
+            else:
+                color = 5763719 if is_income else 15548997
+                status_badge = "✅ สำเร็จแล้ว"
+
+            title = f"🟢 บันทึกรายรับ ({status_badge})" if is_income else f"🔴 บันทึกรายจ่าย ({status_badge})"
             
             fields = [
                 {"name": "💵 จำนวนเงิน", "value": f"**฿{amount:,.2f}**", "inline": True},
                 {"name": "📂 หมวดหมู่", "value": category, "inline": True},
+                {"name": "📌 สถานะ", "value": status_badge, "inline": True},
                 {"name": "📝 หมายเหตุ / ลูกค้า", "value": note or "-", "inline": False},
             ]
             if slip_url:
@@ -333,9 +340,9 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             pass
 
     # ==========================================
-    # 1. ฟอร์มเพิ่มรายการใหม่ (แสดงทันที)
+    # 1. ฟอร์มเพิ่มรายการใหม่
     # ==========================================
-    with st.expander("➕ เพิ่มรายการรายรับ / รายจ่ายใหม่", expanded=True):
+    with st.expander("➕ เพิ่มรายการรายรับ / รายจ่ายใหม่", expanded=False):
         with st.form("accounting_form", clear_on_submit=True):
             col_t1, col_t2 = st.columns(2)
             with col_t1:
@@ -346,6 +353,8 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
 
             with col_t2:
                 tx_date = st.date_input("วันที่ทำรายการ:", value=datetime.now().date())
+                # 🟢 เลือกสถานะรายการ
+                tx_status = st.selectbox("📌 สถานะรายการ:", ["🟢 สำเร็จแล้ว (Completed)", "🟡 รอยืนยัน / รอตรวจสอบสลิป (Pending)"])
                 slip_file = st.file_uploader("📎 แนบรูปสลิปโอนเงิน (JPG / PNG):", type=["png", "jpg", "jpeg"])
                 extra_note = st.text_area("📝 หมายเหตุเพิ่มเติม (Note):", placeholder="เช่น คีย์ 7 วัน / โอนเข้ากสิกร นายนิธิภัทร", height=68)
 
@@ -381,6 +390,8 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                     else:
                         combined_note = customer_ref.strip() or extra_note.strip()
 
+                    status_val = "pending" if "รอยืนยัน" in tx_status else "completed"
+
                     tx_payload = {
                         "type": "income" if "รายรับ" in tx_type else "expense",
                         "amount": amount,
@@ -388,220 +399,295 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                         "note": combined_note,
                         "slip_url": slip_url,
                         "drive_file_id": drive_file_id,
+                        "status": status_val,
                         "created_at": datetime.combine(tx_date, datetime.now().time()).isoformat()
                     }
 
                     try:
                         supabase.table("accounting_records").insert(tx_payload).execute()
                         if send_noti:
-                            send_discord_accounting_alert(tx_type, amount, category, combined_note, slip_url)
+                            send_discord_accounting_alert(tx_type, amount, category, combined_note, status_val, slip_url)
                         st.success(f"✅ บันทึกรายการ {category} ยอด {amount:,.2f} บาท เรียบร้อยแล้ว!")
                         st.rerun()
                     except Exception as err:
                         st.error(f"บันทึกฐานข้อมูลไม่สำเร็จ: {err}")
 
+    # ==========================================
+    # 2. รายการรอยืนยัน (Pending Review Box)
+    # ==========================================
+    try:
+        res_acc = supabase.table("accounting_records").select("*").order("created_at", desc=True).execute()
+        acc_data = res_acc.data or []
+        
+        # จัดการค่า status เริ่มต้นถ้ายังเป็น null
+        for item in acc_data:
+            if not item.get("status"):
+                item["status"] = "completed"
+
+        pending_items = [item for item in acc_data if item.get("status") == "pending"]
+
+        if pending_items:
+            st.warning(f"⚠️ มี **{len(pending_items)} รายการ** ที่อยู่ระหว่าง **รอยืนยัน / รอตรวจสอบยอด**")
+            with st.expander("⏳ รายการที่รอยืนยัน (คลิกเพื่ออนุมัติ / ยกเลิก)", expanded=True):
+                for p_item in pending_items:
+                    p_id = p_item["id"]
+                    p_type = "🟢 รายรับ" if p_item.get("type") == "income" else "🔴 รายจ่าย"
+                    p_col1, p_col2, p_col3, p_col4 = st.columns([3, 2, 1.5, 1.5])
+                    
+                    with p_col1:
+                        st.markdown(f"**ID: {p_id}** | {p_type} **฿{float(p_item.get('amount',0)):,.2f}** - {p_item.get('category','')}")
+                        st.caption(f"📝 {p_item.get('note','') or 'ไม่มีหมายเหตุ'} | 📅 {p_item.get('created_at','')[:16]}")
+                    
+                    with p_col2:
+                        if p_item.get("slip_url"):
+                            st.markdown(f"[📂 คลิกดูรูปสลิป]({p_item['slip_url']})")
+                        else:
+                            st.caption("ไม่มีรูปสลิป")
+                            
+                    with p_col3:
+                        if st.button("✅ อนุมัติยอด", key=f"apprv_{p_id}", type="primary"):
+                            supabase.table("accounting_records").update({"status": "completed"}).eq("id", p_id).execute()
+                            st.success(f"อนุมัติรายการ ID {p_id} เรียบร้อย!")
+                            st.rerun()
+
+                    with p_col4:
+                        if st.button("❌ ปฏิเสธ", key=f"reject_{p_id}"):
+                            supabase.table("accounting_records").update({"status": "rejected"}).eq("id", p_id).execute()
+                            st.info(f"ปฏิเสธรายการ ID {p_id} แล้ว")
+                            st.rerun()
+                    st.write("---")
+
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการโหลดรายการรอยืนยัน: {e}")
+
     st.divider()
 
     # ==========================================
-    # 2. ตัวกรองข้อมูล & รายงานสรุปยอด
+    # 3. ตัวกรองข้อมูล & รายงานสรุปยอด
     # ==========================================
     st.subheader("📊 สรุปยอดบัญชีและประวัติรายการ")
     
-    try:
-        res_acc = supabase.table("accounting_records").select("*").order("created_at", desc=True).execute()
-        acc_data = res_acc.data
+    if acc_data:
+        df_all = pd.DataFrame(acc_data)
+        df_all["created_at"] = pd.to_datetime(df_all["created_at"])
+        df_all["date_only"] = df_all["created_at"].dt.date
 
-        if acc_data:
-            df_all = pd.DataFrame(acc_data)
-            df_all["created_at"] = pd.to_datetime(df_all["created_at"])
-            df_all["date_only"] = df_all["created_at"].dt.date
+        # --- ตัวกรอง ---
+        f_col1, f_col2, f_col3, f_col4 = st.columns([1.5, 1.5, 1.5, 2])
+        with f_col1:
+            filter_period = st.selectbox("📅 ช่วงเวลา:", ["ทั้งหมด", "เดือนนี้ (This Month)", "เดือนที่แล้ว", "กำหนดช่วงวันที่เอง"])
+        
+        with f_col2:
+            filter_status = st.selectbox("📌 สถานะ:", ["ทั้งหมด", "เฉพาะที่สำเร็จ (Completed)", "เฉพาะรอยืนยัน (Pending)", "เฉพาะปฏิเสธ (Rejected)"])
 
-            # --- ตัวกรอง ---
-            f_col1, f_col2, f_col3 = st.columns([1.5, 1.5, 2])
-            with f_col1:
-                filter_period = st.selectbox("📅 ช่วงเวลา:", ["ทั้งหมด", "เดือนนี้ (This Month)", "เดือนที่แล้ว", "กำหนดช่วงวันที่เอง"])
-            
-            with f_col2:
-                all_cats = ["ทั้งหมด"] + sorted(list(df_all["category"].dropna().unique()))
-                filter_cat = st.selectbox("📂 หมวดหมู่:", all_cats)
+        with f_col3:
+            all_cats = ["ทั้งหมด"] + sorted(list(df_all["category"].dropna().unique()))
+            filter_cat = st.selectbox("📂 หมวดหมู่:", all_cats)
 
-            with f_col3:
-                search_kw = st.text_input("🔍 ค้นหา (ชื่อลูกค้า / หมายเหตุ):", placeholder="พิมพ์คำค้นหา...")
+        with f_col4:
+            search_kw = st.text_input("🔍 ค้นหา (ชื่อลูกค้า / หมายเหตุ):", placeholder="พิมพ์คำค้นหา...")
 
-            today = datetime.now().date()
-            if filter_period == "เดือนนี้ (This Month)":
-                df_filtered = df_all[(df_all["created_at"].dt.year == today.year) & (df_all["created_at"].dt.month == today.month)]
-            elif filter_period == "เดือนที่แล้ว":
-                first_this_month = today.replace(day=1)
-                last_month_end = first_this_month - timedelta(days=1)
-                df_filtered = df_all[(df_all["created_at"].dt.year == last_month_end.year) & (df_all["created_at"].dt.month == last_month_end.month)]
-            elif filter_period == "กำหนดช่วงวันที่เอง":
-                dr1, dr2 = st.date_input("เลือกช่วงวันที่:", [today - timedelta(days=30), today])
-                if isinstance(dr1, (datetime, type(today))):
-                    df_filtered = df_all[(df_all["date_only"] >= dr1) & (df_all["date_only"] <= dr2)]
-                else:
-                    df_filtered = df_all
+        # กรองช่วงวันที่
+        today = datetime.now().date()
+        if filter_period == "เดือนนี้ (This Month)":
+            df_filtered = df_all[(df_all["created_at"].dt.year == today.year) & (df_all["created_at"].dt.month == today.month)]
+        elif filter_period == "เดือนที่แล้ว":
+            first_this_month = today.replace(day=1)
+            last_month_end = first_this_month - timedelta(days=1)
+            df_filtered = df_all[(df_all["created_at"].dt.year == last_month_end.year) & (df_all["created_at"].dt.month == last_month_end.month)]
+        elif filter_period == "กำหนดช่วงวันที่เอง":
+            dr1, dr2 = st.date_input("เลือกช่วงวันที่:", [today - timedelta(days=30), today])
+            if isinstance(dr1, (datetime, type(today))):
+                df_filtered = df_all[(df_all["date_only"] >= dr1) & (df_all["date_only"] <= dr2)]
             else:
                 df_filtered = df_all
-
-            if filter_cat != "ทั้งหมด":
-                df_filtered = df_filtered[df_filtered["category"] == filter_cat]
-            if search_kw.strip():
-                df_filtered = df_filtered[df_filtered["note"].fillna("").str.contains(search_kw.strip(), case=False)]
-
-            total_income = df_filtered[df_filtered["type"] == "income"]["amount"].sum()
-            total_expense = df_filtered[df_filtered["type"] == "expense"]["amount"].sum()
-            net_profit = total_income - total_expense
-
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("🟢 รายรับรวม", f"฿ {total_income:,.2f}")
-            m2.metric("🔴 รายจ่ายรวม", f"฿ {total_expense:,.2f}")
-            m3.metric("💵 กำไรสุทธิ (Net)", f"฿ {net_profit:,.2f}", delta=f"{net_profit:,.2f}")
-            m4.metric("📑 จำนวนรายการ", f"{len(df_filtered):,} รายการ")
-
-            # กราฟสรุปยอด
-            if not df_filtered.empty:
-                st.write("#### 📈 กราฟแนวโน้มรายรับ - รายจ่าย")
-                chart_df = df_filtered.copy()
-                chart_df["date_str"] = chart_df["created_at"].dt.strftime("%Y-%m-%d")
-                pivot_chart = chart_df.pivot_table(index="date_str", columns="type", values="amount", aggfunc="sum", fill_value=0)
-                if "income" not in pivot_chart.columns: pivot_chart["income"] = 0
-                if "expense" not in pivot_chart.columns: pivot_chart["expense"] = 0
-                pivot_chart = pivot_chart.rename(columns={"income": "รายรับ (Income)", "expense": "รายจ่าย (Expense)"})
-                pivot_chart = pivot_chart.sort_index()
-                st.bar_chart(pivot_chart, color=["#22c55e", "#ef4444"], use_container_width=True)
-
-            # ตารางแสดงข้อมูล
-            df_display = df_filtered.copy()
-            df_display["ประเภท"] = df_display["type"].map({"income": "🟢 รายรับ", "expense": "🔴 รายจ่าย"})
-            df_display["ยอดเงิน (บาท)"] = df_display["amount"].map(lambda x: f"{x:,.2f}")
-            df_display["วันที่"] = df_display["created_at"].dt.strftime("%Y-%m-%d %H:%M")
-
-            display_cols = ["id", "วันที่", "ประเภท", "หมวดหมู่", "ยอดเงิน (บาท)", "note", "slip_url"]
-            valid_disp_cols = [c for c in display_cols if c in df_display.columns]
-
-            st.dataframe(
-                df_display[valid_disp_cols],
-                column_config={
-                    "id": st.column_config.NumberColumn("ID รายการ", format="%d"),
-                    "note": st.column_config.TextColumn("ลูกค้า / หมายเหตุ (Note)"),
-                    "slip_url": st.column_config.LinkColumn("รูปสลิป", display_text="📂 เปิดดูรูปสลิป")
-                },
-                use_container_width=True,
-                hide_index=True
-            )
-
-            # ปุ่มดาวน์โหลด CSV
-            csv_data = df_filtered.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 ดาวน์โหลดประวัติบัญชี (Export to CSV)",
-                data=csv_data,
-                file_name=f"accounting_report_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
-
-            st.divider()
-
-            # ==========================================
-            # 3. เครื่องมือจัดการรายการ (แก้ไข & ลบ)
-            # ==========================================
-            tab_edit, tab_delete = st.tabs(["✏️ แก้ไขรายการ (Edit)", "🗑️ ลบรายการ (Delete)"])
-
-            with tab_edit:
-                options_list = [
-                    f"ID: {item['id']} | [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
-                    for item in acc_data
-                ]
-                selected_edit_str = st.selectbox("เลือกรายการที่ต้องการแก้ไข:", options_list, key="sel_edit_tx")
-
-                if selected_edit_str:
-                    edit_id = int(selected_edit_str.split("ID: ")[1].split(" |")[0])
-                    edit_row = next((r for r in acc_data if r["id"] == edit_id), None)
-
-                    if edit_row:
-                        with st.form(f"edit_form_{edit_id}"):
-                            ec1, ec2 = st.columns(2)
-                            with ec1:
-                                current_type_idx = 0 if edit_row.get("type") == "income" else 1
-                                edit_type = st.radio("ประเภทรายการ:", ["🟢 รายรับ (Income)", "🔴 รายจ่าย (Expense)"], index=current_type_idx, horizontal=True)
-                                edit_amount = st.number_input("จำนวนเงิน (บาท):", min_value=0.0, value=float(edit_row.get("amount", 0.0)), step=50.0, format="%.2f")
-                                
-                                categories = ["ขาย License Key", "ต่ออายุบอท", "ค่าโฮสต์/เซิร์ฟเวอร์", "ค่าไฟ/อินเทอร์เน็ต", "ค่าเครื่องมือพัฒนา", "อื่นๆ"]
-                                cur_cat = edit_row.get("category", "ขาย License Key")
-                                cat_idx = categories.index(cur_cat) if cur_cat in categories else 0
-                                edit_cat = st.selectbox("หมวดหมู่:", categories, index=cat_idx)
-
-                            with ec2:
-                                try:
-                                    cur_date = pd.to_datetime(edit_row.get("created_at")).date()
-                                except Exception:
-                                    cur_date = datetime.now().date()
-                                edit_date = st.date_input("วันที่ทำรายการ:", value=cur_date)
-                                edit_note = st.text_area("📝 รายละเอียด / หมายเหตุ (Note):", value=edit_row.get("note", "") or "", height=68)
-                                new_slip_file = st.file_uploader("📎 อัปโหลดสลิปใหม่แทนที่รูปเดิม (เว้นว่างไว้ถ้าไม่เปลี่ยน):", type=["png", "jpg", "jpeg"])
-
-                            save_edit_btn = st.form_submit_button("💾 บันทึกการแก้ไขข้อมูล")
-
-                            if save_edit_btn:
-                                final_slip_url = edit_row.get("slip_url", "")
-                                final_drive_id = edit_row.get("drive_file_id", "")
-
-                                if new_slip_file is not None:
-                                    with st.spinner("⏳ กำลังอัปโหลดรูปใหม่ไปยัง Supabase..."):
-                                        try:
-                                            if final_drive_id:
-                                                delete_slip_from_supabase(final_drive_id)
-
-                                            timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                            clean_filename = f"slip_{timestamp_prefix}_{new_slip_file.name}"
-                                            up_res = upload_slip_to_supabase(
-                                                new_slip_file.getvalue(),
-                                                clean_filename,
-                                                mimetype=new_slip_file.type
-                                            )
-                                            final_drive_id = up_res.get("id", "")
-                                            final_slip_url = up_res.get("webViewLink", "")
-                                        except Exception as ex:
-                                            st.warning(f"⚠️ อัปโหลดรูปใหม่ไม่สำเร็จ: {ex}")
-
-                                update_payload = {
-                                    "type": "income" if "รายรับ" in edit_type else "expense",
-                                    "amount": edit_amount,
-                                    "category": edit_cat,
-                                    "note": edit_note.strip(),
-                                    "slip_url": final_slip_url,
-                                    "drive_file_id": final_drive_id,
-                                    "created_at": datetime.combine(edit_date, datetime.now().time()).isoformat()
-                                }
-
-                                try:
-                                    supabase.table("accounting_records").update(update_payload).eq("id", edit_id).execute()
-                                    st.success(f"🎉 อัปเดตรายการ ID: {edit_id} เรียบร้อยแล้ว!")
-                                    st.rerun()
-                                except Exception as err:
-                                    st.error(f"อัปเดตข้อมูลไม่สำเร็จ: {err}")
-
-            with tab_delete:
-                del_options = [
-                    f"ID: {item['id']} | [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
-                    for item in acc_data
-                ]
-                selected_del = st.selectbox("เลือกรายการที่ต้องการลบ:", del_options, key="sel_del_tx")
-
-                col_del1, _ = st.columns([2, 3])
-                with col_del1:
-                    if st.button("❌ ยืนยันลบรายการที่เลือก", type="primary", key="btn_confirm_del_tx"):
-                        selected_tx_id = int(selected_del.split("ID: ")[1].split(" |")[0])
-                        target_row = next((r for r in acc_data if r["id"] == selected_tx_id), None)
-                        
-                        if target_row and target_row.get("drive_file_id"):
-                            delete_slip_from_supabase(target_row["drive_file_id"])
-
-                        supabase.table("accounting_records").delete().eq("id", selected_tx_id).execute()
-                        st.success(f"ลบรายการ ID: {selected_tx_id} เรียบร้อยแล้ว!")
-                        st.rerun()
-
         else:
-            st.info("ยังไม่มีรายการบัญชีในระบบ")
-    except Exception as e:
-        st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
+            df_filtered = df_all
+
+        # กรองตามสถานะ
+        if filter_status == "เฉพาะที่สำเร็จ (Completed)":
+            df_filtered = df_filtered[df_filtered["status"] == "completed"]
+        elif filter_status == "เฉพาะรอยืนยัน (Pending)":
+            df_filtered = df_filtered[df_filtered["status"] == "pending"]
+        elif filter_status == "เฉพาะปฏิเสธ (Rejected)":
+            df_filtered = df_filtered[df_filtered["status"] == "rejected"]
+
+        # กรองตามหมวดหมู่และคำค้นหา
+        if filter_cat != "ทั้งหมด":
+            df_filtered = df_filtered[df_filtered["category"] == filter_cat]
+        if search_kw.strip():
+            df_filtered = df_filtered[df_filtered["note"].fillna("").str.contains(search_kw.strip(), case=False)]
+
+        # คำนวณสรุปยอด (เฉพาะรายการที่ completed)
+        df_completed = df_filtered[df_filtered["status"] == "completed"]
+        total_income = df_completed[df_completed["type"] == "income"]["amount"].sum()
+        total_expense = df_completed[df_completed["type"] == "expense"]["amount"].sum()
+        net_profit = total_income - total_expense
+
+        pending_income = df_filtered[(df_filtered["status"] == "pending") & (df_filtered["type"] == "income")]["amount"].sum()
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("🟢 รายรับจริง (อนุมัติแล้ว)", f"฿ {total_income:,.2f}")
+        m2.metric("🔴 รายจ่ายจริง (อนุมัติแล้ว)", f"฿ {total_expense:,.2f}")
+        m3.metric("💵 กำไรสุทธิ (Net)", f"฿ {net_profit:,.2f}", delta=f"{net_profit:,.2f}")
+        m4.metric("🟡 ยอดรอยืนยัน", f"฿ {pending_income:,.2f}", help="ยอดเงินที่ยังรอการตรวจสอบสลิป")
+
+        # กราฟสรุปยอด (เฉพาะที่อนุมัติแล้ว)
+        if not df_completed.empty:
+            st.write("#### 📈 กราฟแนวโน้มรายรับ - รายจ่าย (เฉพาะรายการที่อนุมัติแล้ว)")
+            chart_df = df_completed.copy()
+            chart_df["date_str"] = chart_df["created_at"].dt.strftime("%Y-%m-%d")
+            pivot_chart = chart_df.pivot_table(index="date_str", columns="type", values="amount", aggfunc="sum", fill_value=0)
+            if "income" not in pivot_chart.columns: pivot_chart["income"] = 0
+            if "expense" not in pivot_chart.columns: pivot_chart["expense"] = 0
+            pivot_chart = pivot_chart.rename(columns={"income": "รายรับ (Income)", "expense": "รายจ่าย (Expense)"})
+            pivot_chart = pivot_chart.sort_index()
+            st.bar_chart(pivot_chart, color=["#22c55e", "#ef4444"], use_container_width=True)
+
+        # ตารางแสดงข้อมูล
+        df_display = df_filtered.copy()
+        df_display["ประเภท"] = df_display["type"].map({"income": "🟢 รายรับ", "expense": "🔴 รายจ่าย"})
+        df_display["สถานะ"] = df_display["status"].map({
+            "completed": "🟢 สำเร็จ",
+            "pending": "🟡 รอยืนยัน",
+            "rejected": "⚪ ยกเลิก/ปฏิเสธ"
+        }).fillna("🟢 สำเร็จ")
+        df_display["ยอดเงิน (บาท)"] = df_display["amount"].map(lambda x: f"{x:,.2f}")
+        df_display["วันที่"] = df_display["created_at"].dt.strftime("%Y-%m-%d %H:%M")
+
+        display_cols = ["id", "วันที่", "ประเภท", "สถานะ", "หมวดหมู่", "ยอดเงิน (บาท)", "note", "slip_url"]
+        valid_disp_cols = [c for c in display_cols if c in df_display.columns]
+
+        st.dataframe(
+            df_display[valid_disp_cols],
+            column_config={
+                "id": st.column_config.NumberColumn("ID", format="%d"),
+                "note": st.column_config.TextColumn("ลูกค้า / หมายเหตุ (Note)"),
+                "slip_url": st.column_config.LinkColumn("รูปสลิป", display_text="📂 เปิดดูรูปสลิป")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # ปุ่มดาวน์โหลด CSV
+        csv_data = df_filtered.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 ดาวน์โหลดประวัติบัญชี (Export to CSV)",
+            data=csv_data,
+            file_name=f"accounting_report_{datetime.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv"
+        )
+
+        st.divider()
+
+        # ==========================================
+        # 4. เครื่องมือจัดการรายการ (แก้ไข & ลบ)
+        # ==========================================
+        tab_edit, tab_delete = st.tabs(["✏️ แก้ไขรายการ (Edit)", "🗑️ ลบรายการ (Delete)"])
+
+        # --- แท็บแก้ไข ---
+        with tab_edit:
+            options_list = [
+                f"ID: {item['id']} | [{item.get('status','completed').upper()}] [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
+                for item in acc_data
+            ]
+            selected_edit_str = st.selectbox("เลือกรายการที่ต้องการแก้ไข:", options_list, key="sel_edit_tx")
+
+            if selected_edit_str:
+                edit_id = int(selected_edit_str.split("ID: ")[1].split(" |")[0])
+                edit_row = next((r for r in acc_data if r["id"] == edit_id), None)
+
+                if edit_row:
+                    with st.form(f"edit_form_{edit_id}"):
+                        ec1, ec2 = st.columns(2)
+                        with ec1:
+                            current_type_idx = 0 if edit_row.get("type") == "income" else 1
+                            edit_type = st.radio("ประเภทรายการ:", ["🟢 รายรับ (Income)", "🔴 รายจ่าย (Expense)"], index=current_type_idx, horizontal=True)
+                            edit_amount = st.number_input("จำนวนเงิน (บาท):", min_value=0.0, value=float(edit_row.get("amount", 0.0)), step=50.0, format="%.2f")
+                            
+                            status_options = ["🟢 สำเร็จแล้ว (Completed)", "🟡 รอยืนยัน / รอตรวจสอบ (Pending)", "⚪ ยกเลิก/ปฏิเสธ (Rejected)"]
+                            cur_st = edit_row.get("status", "completed")
+                            st_idx = 0 if cur_st == "completed" else (1 if cur_st == "pending" else 2)
+                            edit_status = st.selectbox("สถานะรายการ:", status_options, index=st_idx)
+
+                            categories = ["ขาย License Key", "ต่ออายุบอท", "ค่าโฮสต์/เซิร์ฟเวอร์", "ค่าไฟ/อินเทอร์เน็ต", "ค่าเครื่องมือพัฒนา", "อื่นๆ"]
+                            cur_cat = edit_row.get("category", "ขาย License Key")
+                            cat_idx = categories.index(cur_cat) if cur_cat in categories else 0
+                            edit_cat = st.selectbox("หมวดหมู่:", categories, index=cat_idx)
+
+                        with ec2:
+                            try:
+                                cur_date = pd.to_datetime(edit_row.get("created_at")).date()
+                            except Exception:
+                                cur_date = datetime.now().date()
+                            edit_date = st.date_input("วันที่ทำรายการ:", value=cur_date)
+                            edit_note = st.text_area("📝 รายละเอียด / หมายเหตุ (Note):", value=edit_row.get("note", "") or "", height=68)
+                            new_slip_file = st.file_uploader("📎 อัปโหลดสลิปใหม่แทนที่รูปเดิม (เว้นว่างไว้ถ้าไม่เปลี่ยน):", type=["png", "jpg", "jpeg"])
+
+                        save_edit_btn = st.form_submit_button("💾 บันทึกการแก้ไขข้อมูล")
+
+                        if save_edit_btn:
+                            final_slip_url = edit_row.get("slip_url", "")
+                            final_drive_id = edit_row.get("drive_file_id", "")
+
+                            if new_slip_file is not None:
+                                with st.spinner("⏳ กำลังอัปโหลดรูปใหม่ไปยัง Supabase..."):
+                                    try:
+                                        if final_drive_id:
+                                            delete_slip_from_supabase(final_drive_id)
+
+                                        timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                        clean_filename = f"slip_{timestamp_prefix}_{new_slip_file.name}"
+                                        up_res = upload_slip_to_supabase(
+                                            new_slip_file.getvalue(),
+                                            clean_filename,
+                                            mimetype=new_slip_file.type
+                                        )
+                                        final_drive_id = up_res.get("id", "")
+                                        final_slip_url = up_res.get("webViewLink", "")
+                                    except Exception as ex:
+                                        st.warning(f"⚠️ อัปโหลดรูปใหม่ไม่สำเร็จ: {ex}")
+
+                            st_val = "completed" if "Completed" in edit_status else ("pending" if "Pending" in edit_status else "rejected")
+
+                            update_payload = {
+                                "type": "income" if "รายรับ" in edit_type else "expense",
+                                "amount": edit_amount,
+                                "category": edit_cat,
+                                "status": st_val,
+                                "note": edit_note.strip(),
+                                "slip_url": final_slip_url,
+                                "drive_file_id": final_drive_id,
+                                "created_at": datetime.combine(edit_date, datetime.now().time()).isoformat()
+                            }
+
+                            try:
+                                supabase.table("accounting_records").update(update_payload).eq("id", edit_id).execute()
+                                st.success(f"🎉 อัปเดตรายการ ID: {edit_id} เรียบร้อยแล้ว!")
+                                st.rerun()
+                            except Exception as err:
+                                st.error(f"อัปเดตข้อมูลไม่สำเร็จ: {err}")
+
+        # --- แท็บลบ ---
+        with tab_delete:
+            del_options = [
+                f"ID: {item['id']} | [{item.get('status','completed').upper()}] [{item.get('type','').upper()}] {item.get('category','')} - ฿{float(item.get('amount',0)):,.2f} ({item.get('note','') or 'ไม่มีหมายเหตุ'})"
+                for item in acc_data
+            ]
+            selected_del = st.selectbox("เลือกรายการที่ต้องการลบ:", del_options, key="sel_del_tx")
+
+            col_del1, _ = st.columns([2, 3])
+            with col_del1:
+                if st.button("❌ ยืนยันลบรายการที่เลือก", type="primary", key="btn_confirm_del_tx"):
+                    selected_tx_id = int(selected_del.split("ID: ")[1].split(" |")[0])
+                    target_row = next((r for r in acc_data if r["id"] == selected_tx_id), None)
+                    
+                    if target_row and target_row.get("drive_file_id"):
+                        delete_slip_from_supabase(target_row["drive_file_id"])
+
+                    supabase.table("accounting_records").delete().eq("id", selected_tx_id).execute()
+                    st.success(f"ลบรายการ ID: {selected_tx_id} เรียบร้อยแล้ว!")
+                    st.rerun()
+
+    else:
+        st.info("ยังไม่มีรายการบัญชีในระบบ")
