@@ -607,12 +607,36 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     target_obj = next((k for k in valid_licenses if k["license_key"] == target_code), None)
 
                     if target_obj:
+                        thai_tz = timezone(timedelta(hours=7))
+                        now_thai = datetime.now(thai_tz)
+
+                        # แปลงวันหมดอายุเดิมเป็นเวลาไทย
+                        cur_exp_raw = target_obj.get("expire_date") or target_obj.get("expires_at")
+                        try:
+                            if cur_exp_raw and not pd.isna(cur_exp_raw):
+                                cur_exp_clean = str(cur_exp_raw).replace("T", " ")[:19]
+                                if len(cur_exp_clean) == 10:
+                                    cur_exp_clean += " 23:59:59"
+                                cur_exp_dt = datetime.strptime(cur_exp_clean, "%Y-%m-%d %H:%M:%S").replace(tzinfo=thai_tz)
+                            else:
+                                cur_exp_dt = now_thai
+                        except Exception:
+                            cur_exp_dt = now_thai
+
                         col_m1, col_m2 = st.columns(2)
                         with col_m1:
                             cur_sess = target_obj.get("max_sessions") if pd.notna(target_obj.get("max_sessions")) else 1
                             new_max_screens = st.number_input("💻 ปรับจำนวนจอ (Max Sessions):", min_value=1, value=int(cur_sess), step=1)
                             
-                            st.write("**⏳ เพิ่มเวลาการใช้งาน (+วัน/+ชม./+นาที):**")
+                            # 🟢 เพิ่มช่องเลือกวันและเวลาหมดอายุโดยตรง
+                            st.write("**📅 กำหนดวันหมดอายุใหม่โดยตรง (ระบุ วัน/เวลา เอง):**")
+                            cd1, cd2 = st.columns(2)
+                            with cd1:
+                                pick_date = st.date_input("เลือกวันที่:", value=cur_exp_dt.date())
+                            with cd2:
+                                pick_time = st.time_input("เลือกเวลา:", value=cur_exp_dt.time())
+
+                            st.write("**⏳ หรือ เพิ่มเวลาต่ออายุแบบด่วน (+วัน/+ชม./+นาที):**")
                             ad_d, ad_h, ad_m = st.columns(3)
                             with ad_d:
                                 add_days = st.number_input("+วัน (Days):", min_value=0, value=0, step=1)
@@ -635,9 +659,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         col_btn1, col_btn2 = st.columns([2, 2])
                         with col_btn1:
                             if st.button("💾 บันทึกการแก้ไข", type="primary"):
-                                thai_tz = timezone(timedelta(hours=7))
-                                now_thai = datetime.now(thai_tz)
-
                                 update_data = {
                                     "max_sessions": int(new_max_screens),
                                     "Note": new_note.strip(),
@@ -646,29 +667,20 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                 if reset_hwid_flag:
                                     update_data["hwid"] = None
 
-                                # คำนวณบวกเวลาเพิ่ม (+วัน / +ชม. / +นาที)
+                                # 🟢 ถ้ามีการใส่ค่าในช่อง +วัน/+ชม./+นาที ให้คำนวณบวกเพิ่มจากเวลาเดิม
                                 added_delta = timedelta(days=int(add_days), hours=int(add_hours), minutes=int(add_mins))
                                 if added_delta.total_seconds() > 0:
-                                    current_exp = target_obj.get("expire_date") or target_obj.get("expires_at")
-                                    try:
-                                        if current_exp and not pd.isna(current_exp):
-                                            clean_exp = str(current_exp).replace("T", " ")[:19]
-                                            if len(clean_exp) == 10:
-                                                clean_exp += " 23:59:59"
-                                            base_dt = datetime.strptime(clean_exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=thai_tz)
-                                            if base_dt < now_thai:
-                                                base_dt = now_thai
-                                        else:
-                                            base_dt = now_thai
-                                    except Exception:
-                                        base_dt = now_thai
+                                    base_dt = cur_exp_dt if cur_exp_dt > now_thai else now_thai
+                                    final_expire_dt = base_dt + added_delta
+                                else:
+                                    # 🟢 หากไม่ได้ใส่ช่องบวกเวลา ให้อิงตามช่องเลือก "วันที่ + เวลา" โดยตรง
+                                    final_expire_dt = datetime.combine(pick_date, pick_time)
 
-                                    new_expire_dt = base_dt + added_delta
-                                    update_data["expire_date"] = new_expire_dt.strftime("%Y-%m-%d %H:%M:%S")
+                                update_data["expire_date"] = final_expire_dt.strftime("%Y-%m-%d %H:%M:%S")
 
                                 try:
                                     supabase.table("licenses").update(update_data).eq("license_key", target_code).execute()
-                                    st.success(f"🎉 อัปเดตคีย์ `{target_code}` เรียบร้อยแล้ว!")
+                                    st.success(f"🎉 อัปเดตคีย์ `{target_code}` สำเร็จ! วันหมดอายุใหม่: {final_expire_dt.strftime('%Y-%m-%d %H:%M:%S')}")
                                     st.rerun()
                                 except Exception as err:
                                     st.error(f"อัปเดตไม่สำเร็จ: {err}")
