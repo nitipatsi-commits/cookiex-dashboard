@@ -110,6 +110,34 @@ def check_and_alert_bot_health(bot_data_list):
                     st.session_state.alerted_bots[k_code] = datetime.now()
                 except Exception:
                     pass
+# 🟢 ฟังก์ชันส่งแจ้งเตือน Discord เมื่อมีการสร้าง/ต่ออายุคีย์
+def send_discord_license_alert(action_title, key_code, tier, screens, expire_str, note=""):
+    webhook_url = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
+    if not webhook_url:
+        return
+
+    thai_now = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d %H:%M:%S")
+    is_create = "สร้าง" in action_title
+    color = 5763719 if is_create else 3447003  # สีเขียวสด (สร้าง) / สีฟ้า (ต่ออายุ)
+
+    payload = {
+        "embeds": [{
+            "title": f"🔑 {action_title}",
+            "color": color,
+            "fields": [
+                {"name": "🔑 License Key", "value": f"`{key_code}`", "inline": True},
+                {"name": "⭐ ระดับสิทธิ์", "value": f"`{tier.upper()}`", "inline": True},
+                {"name": "💻 จำนวนจอ", "value": f"`{screens} จอ`", "inline": True},
+                {"name": "⏰ วันหมดอายุ", "value": f"**{expire_str}**", "inline": False},
+                {"name": "📝 ลูกค้า / บันทึก (Note)", "value": f"{note or '-'}", "inline": False}
+            ],
+            "footer": {"text": f"ระบบจัดการ License อัตโนมัติ • {thai_now}"}
+        }]
+    }
+    try:
+        requests.post(webhook_url, json=payload, timeout=5)
+    except Exception:
+        pass
 
 # 🟢 ระบบอัปโหลดไฟล์ขึ้น Google Drive
 def upload_slip_to_gdrive(file_bytes, filename, mimetype="image/jpeg"):
@@ -350,50 +378,49 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
     st.title("🔑 License Key Manager")
-    st.caption("ระบบจัดการคีย์ลูกค้า เชื่อมต่อฐานข้อมูลจริง กำหนดเวลา วัน/ชม./นาที และผ่อนผัน 12 ชม. ก่อนลบอัตโนมัติ")
+    st.caption("ระบบจัดการคีย์ลูกค้า เชื่อมต่อฐานข้อมูลจริง กำหนดเวลา วัน/ชม./นาที (เวลาไทย UTC+7)")
 
-    now_utc = datetime.now(timezone.utc)
+    thai_tz = timezone(timedelta(hours=7))
+    now_thai = datetime.now(thai_tz)
 
     def generate_random_key(length=16):
         chars = string.ascii_uppercase + string.digits
         return "".join(random.choice(chars) for _ in range(length))
 
+    # 🟢 1. ฟังก์ชันแปลงวันที่ทุกรูปแบบเป็น Datetime เวลาไทย ไม่บวก 7 ชั่วโมงซ้ำ
+    def parse_to_thai_datetime(ts_val):
+        if not ts_val or pd.isna(ts_val):
+            return None
+        s = str(ts_val).strip()
+        try:
+            # กรณีมี Timezone ระบุ (+07 หรือ +07:00)
+            if "+07" in s or "+07:00" in s:
+                clean_s = s.split("+")[0].replace("T", " ")[:19]
+                return datetime.strptime(clean_s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=thai_tz)
+            if "Z" in s:
+                return pd.to_datetime(s, utc=True).tz_convert("Asia/Bangkok").to_pydatetime()
+            
+            # กรณีบันทึกเป็นวันเวลาตรงๆ (YYYY-MM-DD HH:MM:SS) ให้ใช้เป็นเวลาไทยทันที
+            clean_s = s.replace("T", " ")[:19]
+            if len(clean_s) == 10:
+                return datetime.strptime(clean_s + " 23:59:59", "%Y-%m-%d %H:%M:%S").replace(tzinfo=thai_tz)
+            return datetime.strptime(clean_s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=thai_tz)
+        except Exception:
+            return None
+
     def safe_format_thai_time(ts_val):
         if not ts_val or pd.isna(ts_val):
             return "ตลอดชีพ"
-        try:
-            dt = pd.to_datetime(ts_val, utc=True)
-            return dt.tz_convert('Asia/Bangkok').strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            return str(ts_val)
+        dt = parse_to_thai_datetime(ts_val)
+        if dt:
+            return dt.strftime("%Y-%m-%d %H:%M")
+        return str(ts_val)[:16]
 
     try:
-        # 1. ดึงข้อมูล License Key ทั้งหมด
+        # 🟢 2. ดึงข้อมูล License Key ทั้งหมด (ปิดระบบลบอัตโนมัติ ไม่ลบคีย์ทิ้ง)
         res_keys = supabase.table("licenses").select("*").execute()
         raw_licenses = res_keys.data or []
-
-        valid_licenses = []
-        deleted_count = 0
-        purge_threshold = now_utc - timedelta(hours=12)
-
-        # เคลียร์คีย์หมดอายุเกิน 12 ชม. อัตโนมัติ
-        for k in raw_licenses:
-            exp_str = k.get("expire_date") or k.get("expires_at")
-            is_purged = False
-            if exp_str:
-                try:
-                    exp_dt = pd.to_datetime(exp_str, utc=True)
-                    if exp_dt < purge_threshold:
-                        supabase.table("licenses").delete().eq("license_key", k.get("license_key")).execute()
-                        deleted_count += 1
-                        is_purged = True
-                except Exception:
-                    pass
-            if not is_purged:
-                valid_licenses.append(k)
-
-        if deleted_count > 0:
-            st.toast(f"🧹 ลบคีย์ที่หมดอายุเกิน 12 ชม. อัตโนมัติ {deleted_count} รายการ", icon="🗑️")
+        valid_licenses = raw_licenses
 
         df_keys = pd.DataFrame(valid_licenses) if valid_licenses else pd.DataFrame()
 
@@ -404,7 +431,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             df_keys["display_screens"] = df_keys.apply(lambda r: int(r.get("max_sessions") if pd.notna(r.get("max_sessions")) else (r.get("max_concurrent") or 1)), axis=1)
             df_keys["is_active_bool"] = df_keys.apply(lambda r: r.get("is_active") if "is_active" in r and pd.notna(r.get("is_active")) else (str(r.get("status", "active")).lower() == "active"), axis=1)
 
-            # คำนวณสถานะและเวลาคงเหลือ
+            # 🟢 3. คำนวณสถานะและเวลาคงเหลือเทียบกับเวลาไทยปัจจุบัน
             def calculate_key_status(row):
                 if not row["is_active_bool"]:
                     return "🔴 ระงับการใช้งาน", "ถูกระงับ"
@@ -413,26 +440,22 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 if not exp_val or pd.isna(exp_val):
                     return "🟢 ใช้งานได้ (ตลอดชีพ)", "ไม่มีวันหมดอายุ"
 
-                try:
-                    exp_dt = pd.to_datetime(exp_val, utc=True)
-                    diff = exp_dt - now_utc
-                    if diff.total_seconds() > 0:
-                        total_sec = int(diff.total_seconds())
-                        days = total_sec // 86400
-                        hours = (total_sec % 86400) // 3600
-                        mins = (total_sec % 3600) // 60
-                        if days > 0:
-                            return "🟢 กำลังใช้งาน", f"เหลือ {days}วัน {hours}ชม. {mins}น."
-                        else:
-                            return "🟢 กำลังใช้งาน", f"เหลือ {hours}ชม. {mins}น."
-                    else:
-                        del_diff = (exp_dt + timedelta(hours=12)) - now_utc
-                        mins_left = max(0, int(del_diff.total_seconds() / 60))
-                        h_left = mins_left // 60
-                        m_left = mins_left % 60
-                        return "⏳ หมดอายุ (ผ่อนผัน)", f"รอลบใน {h_left}ชม. {m_left}น."
-                except Exception:
+                exp_dt = parse_to_thai_datetime(exp_val)
+                if not exp_dt:
                     return "🟢 กำลังใช้งาน", "-"
+
+                diff = exp_dt - now_thai
+                if diff.total_seconds() > 0:
+                    total_sec = int(diff.total_seconds())
+                    days = total_sec // 86400
+                    hours = (total_sec % 86400) // 3600
+                    mins = (total_sec % 3600) // 60
+                    if days > 0:
+                        return "🟢 กำลังใช้งาน", f"เหลือ {days}วัน {hours}ชม. {mins}น."
+                    else:
+                        return "🟢 กำลังใช้งาน", f"เหลือ {hours}ชม. {mins}น."
+                else:
+                    return "⏳ หมดอายุแล้ว", "หมดอายุ"
 
             res_status = [calculate_key_status(r) for _, r in df_keys.iterrows()]
             df_keys["สถานะระบบ"] = [s[0] for s in res_status]
@@ -453,13 +476,13 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         m1.metric("🔑 คีย์ทั้งหมด", f"{len(df_keys):,} คีย์")
         m2.metric("🟢 พร้อมใช้งาน", f"{active_count:,} คีย์")
         m3.metric("💻 โควตาจอรันจริง", f"{total_screens:,} จอ")
-        m4.metric("⏳ หมดอายุ (ผ่อนผัน 12 ชม.)", f"{expired_grace_count:,} คีย์")
+        m4.metric("⏳ หมดอายุแล้ว", f"{expired_grace_count:,} คีย์")
 
         st.write("")
 
         tab_table, tab_grace, tab_add, tab_manage = st.tabs([
             f"📋 รายการคีย์ทั้งหมด ({len(df_keys)})",
-            f"⏳ คีย์หมดอายุผ่อนผัน ({expired_grace_count})",
+            f"⏳ คีย์หมดอายุ ({expired_grace_count})",
             "➕ สร้างคีย์ใหม่ (Add Key)",
             "⚙️ แก้ไข / จัดการคีย์ (Manage)"
         ])
@@ -471,7 +494,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 with f1:
                     search_txt = st.text_input("🔍 ค้นหาคีย์ / ชื่อลูกค้า (Note) / HWID:", placeholder="พิมพ์ค้นหา เช่น พี่นิว, เต้ NB...", key="s_all_keys")
                 with f2:
-                    filter_st = st.selectbox("📌 กรองสถานะ:", ["ทั้งหมด", "🟢 กำลังใช้งาน", "⏳ หมดอายุ (ผ่อนผัน)", "🔴 ระงับการใช้งาน"], key="f_st_keys")
+                    filter_st = st.selectbox("📌 กรองสถานะ:", ["ทั้งหมด", "🟢 กำลังใช้งาน", "⏳ หมดอายุแล้ว", "🔴 ระงับการใช้งาน"], key="f_st_keys")
                 with f3:
                     tier_list = ["ทั้งหมด"] + sorted(list(df_keys["display_tier"].dropna().unique()))
                     filter_tr = st.selectbox("⭐ ระดับ (Key Type):", tier_list, key="f_tr_keys")
@@ -511,11 +534,11 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             else:
                 st.info("ยังไม่มีข้อมูล License Key ในระบบ")
 
-        # --- TAB 2: คีย์หมดอายุ (ผ่อนผัน 12 ชม.) ---
+        # --- TAB 2: คีย์หมดอายุ ---
         with tab_grace:
             df_grace = df_keys[df_keys["สถานะระบบ"].str.contains("⏳")] if not df_keys.empty else pd.DataFrame()
             if not df_grace.empty:
-                st.warning("⚠️ รายการคีย์ด้านล่างนี้หมดอายุแล้ว แต่ระบบเก็บไว้ **12 ชม.** เพื่อให้โอกาสลูกค้าต่ออายุ ก่อนถูกลบทิ้งถาวร")
+                st.warning("⚠️ รายการคีย์ด้านล่างนี้หมดอายุแล้ว สามารถกดต่ออายุให้ลูกค้า หรือกดลบทิ้งได้ทันที")
                 for _, r_exp in df_grace.iterrows():
                     k_code = r_exp["license_key"]
                     c1, c2 = st.columns([3, 1.5])
@@ -524,19 +547,35 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         st.caption(f"📝 {r_exp.get('display_note','') or 'ไม่มีบันทึก'} | ⏰ **{r_exp.get('เวลาคงเหลือ','')}**")
                     with c2:
                         b1, b2 = st.columns(2)
+
                         with b1:
                             if st.button("⚡ ต่ออายุ 30 วัน", key=f"btn_rn_{k_code}"):
-                                new_exp = now_utc + timedelta(days=30)
-                                supabase.table("licenses").update({"expire_date": new_exp.isoformat(), "is_active": True}).eq("license_key", k_code).execute()
+                                new_exp_thai = (now_thai + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+                                supabase.table("licenses").update({
+                                    "expire_date": new_exp_thai,
+                                    "is_active": True
+                                }).eq("license_key", k_code).execute()
+
+                                # 🟢 ยิงแจ้งเตือน Discord ทันที
+                                send_discord_license_alert(
+                                    action_title="ต่ออายุคีย์อัตโนมัติ (+30 วัน)",
+                                    key_code=k_code,
+                                    tier=str(r_exp.get('display_tier', 'Normal')),
+                                    screens=r_exp.get('display_screens', 1),
+                                    expire_str=new_exp_thai,
+                                    note=r_exp.get('display_note', '')
+                                )
+
                                 st.success(f"ต่ออายุคีย์ `{k_code}` สำเร็จ!")
                                 st.rerun()
+
                         with b2:
                             if st.button("🗑️ ลบทันที", key=f"btn_dl_{k_code}"):
                                 supabase.table("licenses").delete().eq("license_key", k_code).execute()
                                 st.rerun()
                     st.write("---")
             else:
-                st.success("🎉 ไม่มีคีย์ที่หมดอายุค้างอยู่ในช่วง 12 ชั่วโมง")
+                st.success("🎉 ไม่มีคีย์ที่หมดอายุค้างอยู่ในระบบ")
 
         # --- TAB 3: สร้างคีย์ใหม่ ---
         with tab_add:
@@ -588,8 +627,19 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                     try:
                         supabase.table("licenses").insert(key_payload).execute()
+                        
+                        # 🟢 ยิงแจ้งเตือน Discord ทันที
+                        send_discord_license_alert(
+                            action_title="สร้าง License Key ใหม่",
+                            key_code=final_key,
+                            tier=tier_type,
+                            screens=max_sessions,
+                            expire_str=exp_msg,
+                            note=customer_note.strip()
+                        )
+                        
                         st.success(f"🎉 สร้างคีย์ `{final_key}` สำเร็จ! (หมดอายุ: {exp_msg})")
-                        st.rerun()
+                        st.rerun()[cite: 2]
                     except Exception as err:
                         st.error(f"สร้างคีย์ไม่สำเร็จ: {err}")
 
@@ -682,8 +732,19 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                                 try:
                                     supabase.table("licenses").update(update_data).eq("license_key", target_code).execute()
+                                    
+                                    # 🟢 ยิงแจ้งเตือน Discord
+                                    send_discord_license_alert(
+                                        action_title="อัปเดตข้อมูล / แก้ไขเวลาคีย์",
+                                        key_code=target_code,
+                                        tier=str(target_obj.get('key_type', 'normal')),
+                                        screens=new_max_screens,
+                                        expire_str=final_expire_str,
+                                        note=new_note.strip()
+                                    )
+
                                     st.success(f"🎉 อัปเดตคีย์ `{target_code}` สำเร็จ! (วันหมดอายุ: {final_expire_str})")
-                                    st.rerun()
+                                    st.rerun()[cite: 2]
                                 except Exception as err:
                                     st.error(f"อัปเดตไม่สำเร็จ: {err}")
 
