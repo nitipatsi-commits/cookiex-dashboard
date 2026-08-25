@@ -39,6 +39,78 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 ADMIN_DISCORD_WEBHOOK = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
 GDRIVE_FOLDER_ID = st.secrets.get("GDRIVE_FOLDER_ID", "")
 
+# ==========================================
+# 🚨 ฟังก์ชัน WATCHDOG เฝ้าระวังบอทและแจ้งเตือน DISCORD
+# ==========================================
+def check_and_alert_bot_health(bot_data_list):
+    webhook_url = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
+    if not webhook_url or not bot_data_list:
+        return
+
+    # ป้องกันการส่งแจ้งเตือนซ้ำรัวๆ โดยจำเวลาที่ส่งไว้ใน Session
+    if "alerted_bots" not in st.session_state:
+        st.session_state.alerted_bots = {}
+
+    now_utc = datetime.now(timezone.utc)
+
+    for bot in bot_data_list:
+        k_code = bot.get("license_key", "Unknown")
+        status = str(bot.get("status", "")).upper()
+        last_seen_str = bot.get("last_seen") or bot.get("last_heartbeat")
+        step_info = str(bot.get("current_step", "-"))
+        
+        is_problem = False
+        problem_reason = ""
+
+        # 1. เช็คสถานะขัดข้องชัดเจน (CRASH หรือ แคปช่า)
+        if "CRASH" in status:
+            is_problem = True
+            problem_reason = "💥 บอทแครช / CRASH"
+        elif "CAPTCHA" in status or "ติด" in step_info:
+            is_problem = True
+            problem_reason = "🚨 บอทติด CAPTCHA ต้องแก้ด่วน"
+
+        # 2. เช็คกรณีบอทดับเงียบ (ขาดการส่งเวลาเกิน 5 นาที)
+        if last_seen_str and not is_problem:
+            try:
+                last_seen_dt = pd.to_datetime(last_seen_str, utc=True)
+                diff_mins = (now_utc - last_seen_dt).total_seconds() / 60
+                if diff_mins > 5 and status == "RUNNING":
+                    is_problem = True
+                    problem_reason = f"⚠️ ขาดการเชื่อมต่อเกิน {int(diff_mins)} นาที (เครื่องดับ/เน็ตหลุด)"
+            except Exception:
+                pass
+
+        # 3. ยิง Discord เฉพาะเมื่อตรวจพบปัญหา และเว้นระยะห่างอย่างน้อย 30 นาทีต่อเครื่อง
+        if is_problem:
+            last_alert_time = st.session_state.alerted_bots.get(k_code)
+            should_send = False
+            if not last_alert_time:
+                should_send = True
+            elif (datetime.now() - last_alert_time).total_seconds() > 1800:  # 30 นาทีเตือนซ้ำ
+                should_send = True
+
+            if should_send:
+                thai_time_str = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d %H:%M:%S")
+                payload = {
+                    "embeds": [{
+                        "title": f"🚨 แจ้งเตือนบอท: {problem_reason}",
+                        "color": 15548997,
+                        "fields": [
+                            {"name": "🔑 License Key", "value": f"`{k_code}`", "inline": True},
+                            {"name": "⚙️ สถานะบอท", "value": f"`{status}`", "inline": True},
+                            {"name": "📍 ขั้นตอนล่าสุด", "value": f"{step_info}", "inline": False},
+                            {"name": "💻 สเปกเครื่อง", "value": f"{bot.get('pc_specs', '-')[:80]}", "inline": False}
+                        ],
+                        "footer": {"text": f"ระบบเฝ้าระวังอัตโนมัติ (Watchdog) • {thai_time_str}"}
+                    }]
+                }
+                try:
+                    requests.post(webhook_url, json=payload, timeout=5)
+                    st.session_state.alerted_bots[k_code] = datetime.now()
+                except Exception:
+                    pass
+
 # 🟢 ระบบอัปโหลดไฟล์ขึ้น Google Drive
 def upload_slip_to_gdrive(file_bytes, filename, mimetype="image/jpeg"):
     """อัปโหลดสลิปไปยังโฟลเดอร์ Google Drive และคืนค่า URL ดูรูปภาพ"""
@@ -156,11 +228,87 @@ if st.sidebar.button("🚪 ออกจากระบบ"):
     st.rerun()
 
 # ---------------------------------------------------------
-# 📊 TAB 1: LIVE MONITOR
+# 📊 TAB 1: LIVE MONITOR (พร้อมระบบ WATCHDOG เฝ้าระวัง Discord Alert)
 # ---------------------------------------------------------
 if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
     st.title("📊 Live Bot Monitor")
     st.caption("มอนิเตอร์สถานะลูกค้าเรียลไทม์และสเปคฮาร์ดแวร์เครื่องลูกค้า")
+
+    # --- ฟังก์ชันตรวจจับและยิงแจ้งเตือน Discord ---
+    def check_and_alert_bot_health(raw_bot_data):
+        webhook_url = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
+        if not webhook_url or not raw_bot_data:
+            return
+
+        if "alerted_bots" not in st.session_state:
+            st.session_state.alerted_bots = {}
+
+        now_utc = datetime.now(timezone.utc)
+
+        for bot in raw_bot_data:
+            k_code = str(bot.get("license_key", "Unknown"))
+            status = str(bot.get("status", "")).upper()
+            step_info = str(bot.get("current_step", "-"))
+            last_seen_raw = bot.get("last_seen")
+
+            is_problem = False
+            problem_reason = ""
+
+            # 1. เช็คสถานะขัดข้อง (CRASH หรือ แคปช่า)
+            if status == "CRASH" or "CRASH" in status:
+                is_problem = True
+                problem_reason = "💥 บอทขัดข้อง / CRASH"
+            elif "CAPTCHA" in step_info.upper() or "ติด" in step_info:
+                is_problem = True
+                problem_reason = "🚨 บอทติด CAPTCHA ต้องแก้ด่วน"
+
+            # 2. เช็คกรณีเครื่องค้าง / หลุดการเชื่อมต่อเกิน 5 นาที
+            if last_seen_raw and not is_problem:
+                try:
+                    last_seen_dt = pd.to_datetime(last_seen_raw, utc=True)
+                    diff_mins = (now_utc - last_seen_dt).total_seconds() / 60
+                    if diff_mins > 5 and status == "RUNNING":
+                        is_problem = True
+                        problem_reason = f"⚠️ ขาดการเชื่อมต่อเกิน {int(diff_mins)} นาที (เครื่องดับ/เน็ตหลุด)"
+                except Exception:
+                    pass
+
+            # 3. ส่งเข้า Discord (เว้นระยะห่างเครื่องละ 30 นาที)
+            if is_problem:
+                last_alert_time = st.session_state.alerted_bots.get(k_code)
+                should_send = False
+                if not last_alert_time:
+                    should_send = True
+                elif (datetime.now() - last_alert_time).total_seconds() > 1800:
+                    should_send = True
+
+                if should_send:
+                    thai_now = datetime.now(timezone(timedelta(hours=7))).strftime("%Y-%m-%d %H:%M:%S")
+                    try:
+                        last_seen_thai = pd.to_datetime(last_seen_raw, utc=True).tz_convert("Asia/Bangkok").strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        last_seen_thai = str(last_seen_raw)
+
+                    payload = {
+                        "embeds": [{
+                            "title": f"🚨 แจ้งเตือนบอท: {problem_reason}",
+                            "color": 15548997,
+                            "fields": [
+                                {"name": "🔑 License Key", "value": f"`{k_code}`", "inline": True},
+                                {"name": "⚙️ สถานะบอท", "value": f"`{status}`", "inline": True},
+                                {"name": "📍 ขั้นตอนล่าสุด", "value": f"{step_info}", "inline": False},
+                                {"name": "📦 กล่องสะสม", "value": f"{bot.get('boxes_collected', 0):,} กล่อง", "inline": True},
+                                {"name": "⏰ เวลาล่าสุดที่พบ", "value": f"{last_seen_thai}", "inline": True},
+                                {"name": "💻 สเปกเครื่อง", "value": f"{str(bot.get('pc_specs', '-'))[:80]}", "inline": False}
+                            ],
+                            "footer": {"text": f"ระบบเฝ้าระวังอัตโนมัติ (Watchdog) • {thai_now}"}
+                        }]
+                    }
+                    try:
+                        requests.post(webhook_url, json=payload, timeout=5)
+                        st.session_state.alerted_bots[k_code] = datetime.now()
+                    except Exception:
+                        pass
 
     if st.button("🔄 รีเฟรชข้อมูลสด"):
         st.rerun()
@@ -169,13 +317,16 @@ if menu == "📊 Live Monitor (มอนิเตอร์บอท)":
         res = supabase.table("user_monitors").select("*").execute()
         data = res.data
         if data:
+            # 🟢 เรียก Watchdog ตรวจสอบสถานะทันทีที่มีข้อมูลเข้ามา
+            check_and_alert_bot_health(data)
+
             df = pd.DataFrame(data)
             if "last_seen" in df.columns:
-                df["last_seen"] = pd.to_datetime(df["last_seen"]).dt.tz_convert("Asia/Bangkok").dt.strftime("%Y-%m-%d %H:%M:%S")
+                df["last_seen"] = pd.to_datetime(df["last_seen"], utc=True).dt.tz_convert("Asia/Bangkok").dt.strftime("%Y-%m-%d %H:%M:%S")
 
             total_bots = len(df)
             active_bots = len(df[df["status"] == "RUNNING"]) if "status" in df.columns else 0
-            captcha_bots = len(df[df["current_step"].str.contains("CAPTCHA", na=False)]) if "current_step" in df.columns else 0
+            captcha_bots = len(df[df["current_step"].fillna("").str.contains("CAPTCHA|ติด", case=False)]) if "current_step" in df.columns else 0
             crashed_bots = len(df[df["status"] == "CRASH"]) if "status" in df.columns else 0
             total_boxes = df["boxes_collected"].sum() if "boxes_collected" in df.columns else 0
 
@@ -412,12 +563,16 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                 if submit_add_key:
                     final_key = custom_key.strip() if custom_key.strip() else generate_random_key(16)
-                    total_delta = timedelta(days=days_input, hours=hours_input, minutes=mins_input)
+                    total_delta = timedelta(days=int(days_input), hours=int(hours_input), minutes=int(mins_input))
                     
+                    # 🟢 ล็อกเวลาสร้างตามเวลาประเทศไทย (UTC+7)
+                    thai_tz = timezone(timedelta(hours=7))
+                    now_thai = datetime.now(thai_tz)
+
                     if total_delta.total_seconds() > 0:
-                        expire_time = now_utc + total_delta
-                        exp_str = expire_time.isoformat()
-                        exp_msg = expire_time.astimezone(timezone(timedelta(hours=7))).strftime('%Y-%m-%d %H:%M น.')
+                        expire_time = now_thai + total_delta
+                        exp_str = expire_time.strftime("%Y-%m-%d %H:%M:%S")
+                        exp_msg = expire_time.strftime('%Y-%m-%d %H:%M น.')
                     else:
                         exp_str = None
                         exp_msg = "ตลอดชีพ (ไม่มีวันหมดอายุ)"
@@ -480,6 +635,10 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         col_btn1, col_btn2 = st.columns([2, 2])
                         with col_btn1:
                             if st.button("💾 บันทึกการแก้ไข", type="primary"):
+                                # 🟢 1. กำหนดเวลาไทย (UTC+7) เพื่อให้ตรงกับเครื่องคอมพิวเตอร์ที่รันบอท
+                                thai_tz = timezone(timedelta(hours=7))
+                                now_thai = datetime.now(thai_tz)
+
                                 update_data = {
                                     "max_sessions": int(new_max_screens),
                                     "Note": new_note.strip(),
@@ -488,29 +647,43 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                 if reset_hwid_flag:
                                     update_data["hwid"] = None
 
-                                added_delta = timedelta(days=add_days, hours=add_hours, minutes=add_mins)
+                                # 🟢 2. คำนวณบวกเวลาเพิ่ม (+วัน / +ชม. / +นาที)
+                                added_delta = timedelta(days=int(add_days), hours=int(add_hours), minutes=int(add_mins))
                                 if added_delta.total_seconds() > 0:
                                     current_exp = target_obj.get("expire_date") or target_obj.get("expires_at")
                                     try:
-                                        base_exp = pd.to_datetime(current_exp, utc=True)
-                                        if pd.isna(base_exp) or base_exp < now_utc:
-                                            base_exp = now_utc
-                                        update_data["expire_date"] = (base_exp + added_delta).isoformat()
+                                        if current_exp and not pd.isna(current_exp):
+                                            clean_exp = str(current_exp).replace("T", " ")[:19]
+                                            if len(clean_exp) == 10:
+                                                clean_exp += " 23:59:59"
+                                            base_dt = datetime.strptime(clean_exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=thai_tz)
+                                            # ถ้าคีย์เดิมหมดอายุไปแล้ว ให้เริ่มบวกต่อจากเวลาปัจจุบันทันที
+                                            if base_dt < now_thai:
+                                                base_dt = now_thai
+                                        else:
+                                            base_dt = now_thai
                                     except Exception:
-                                        update_data["expire_date"] = (now_utc + added_delta).isoformat()
+                                        base_dt = now_thai
 
-                                supabase.table("licenses").update(update_data).eq("license_key", target_code).execute()
-                                st.success(f"อัปเดตคีย์ `{target_code}` เรียบร้อยแล้ว!")
-                                st.rerun()
+                                    # คำนวณเวลาหมดอายุใหม่แล้วบันทึกเป็นฟอร์แมต YYYY-MM-DD HH:MM:SS
+                                    new_expire_dt = base_dt + added_delta
+                                    update_data["expire_date"] = new_expire_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+                                try:
+                                    supabase.table("licenses").update(update_data).eq("license_key", target_code).execute()
+                                    st.success(f"🎉 อัปเดตคีย์ `{target_code}` เรียบร้อยแล้ว!")
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(f"อัปเดตไม่สำเร็จ: {err}")
 
                         with col_btn2:
                             if st.button("❌ ลบคีย์นี้ทิ้งถาวร"):
-                                supabase.table("licenses").delete().eq("license_key", target_code).execute()
-                                st.success(f"ลบคีย์ `{target_code}` แล้ว!")
-                                st.rerun()
-
-    except Exception as e:
-        st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล License: {e}")
+                                try:
+                                    supabase.table("licenses").delete().eq("license_key", target_code).execute()
+                                    st.success(f"ลบคีย์ `{target_code}` แล้ว!")
+                                    st.rerun()
+                                except Exception as err:
+                                    st.error(f"ลบไม่สำเร็จ: {err}")
 
 # ---------------------------------------------------------
 # 💻 TAB 3: ACTIVE SESSIONS
