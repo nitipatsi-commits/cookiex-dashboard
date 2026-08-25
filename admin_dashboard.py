@@ -635,7 +635,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         col_btn1, col_btn2 = st.columns([2, 2])
                         with col_btn1:
                             if st.button("💾 บันทึกการแก้ไข", type="primary"):
-                                # 🟢 1. กำหนดเวลาไทย (UTC+7) เพื่อให้ตรงกับเครื่องคอมพิวเตอร์ที่รันบอท
                                 thai_tz = timezone(timedelta(hours=7))
                                 now_thai = datetime.now(thai_tz)
 
@@ -647,7 +646,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                 if reset_hwid_flag:
                                     update_data["hwid"] = None
 
-                                # 🟢 2. คำนวณบวกเวลาเพิ่ม (+วัน / +ชม. / +นาที)
+                                # คำนวณบวกเวลาเพิ่ม (+วัน / +ชม. / +นาที)
                                 added_delta = timedelta(days=int(add_days), hours=int(add_hours), minutes=int(add_mins))
                                 if added_delta.total_seconds() > 0:
                                     current_exp = target_obj.get("expire_date") or target_obj.get("expires_at")
@@ -657,7 +656,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                             if len(clean_exp) == 10:
                                                 clean_exp += " 23:59:59"
                                             base_dt = datetime.strptime(clean_exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=thai_tz)
-                                            # ถ้าคีย์เดิมหมดอายุไปแล้ว ให้เริ่มบวกต่อจากเวลาปัจจุบันทันที
                                             if base_dt < now_thai:
                                                 base_dt = now_thai
                                         else:
@@ -665,7 +663,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                     except Exception:
                                         base_dt = now_thai
 
-                                    # คำนวณเวลาหมดอายุใหม่แล้วบันทึกเป็นฟอร์แมต YYYY-MM-DD HH:MM:SS
                                     new_expire_dt = base_dt + added_delta
                                     update_data["expire_date"] = new_expire_dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -684,6 +681,9 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                     st.rerun()
                                 except Exception as err:
                                     st.error(f"ลบไม่สำเร็จ: {err}")
+
+    except Exception as e:
+        st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล License: {e}")
 
 # ---------------------------------------------------------
 # 💻 TAB 3: ACTIVE SESSIONS
