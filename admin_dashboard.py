@@ -8,7 +8,6 @@ import threading
 import time
 
 import numpy as np
-
 import pandas as pd
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -186,7 +185,6 @@ def get_db_connection():
     )
 
 def db_query(sql, params=None, fetch=True):
-    """ฟังก์ชันกลางสำหรับ SELECT ดึงข้อมูลเป็น List of Dicts"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, params or ())
@@ -196,7 +194,6 @@ def db_query(sql, params=None, fetch=True):
             return []
 
 def db_execute(sql, params=None):
-    """ฟังก์ชันกลางสำหรับ INSERT, UPDATE, DELETE"""
     with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params or ())
@@ -722,11 +719,9 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             df_keys["display_screens"] = df_keys.get("max_sessions", 1).apply(lambda x: safe_int(x, 1))
             df_keys["is_active_bool"] = df_keys.get("is_active", True).astype(bool)
 
-            # 🚀 แปลงวันหมดอายุเป็น Datetime แบบรวดเร็วรอบเดียวจบ (Vectorized)
             exp_series = pd.to_datetime(df_keys["expire_date"], errors="coerce")
             now_ts = pd.Timestamp(now_thai_val.replace(tzinfo=None))
 
-            # กำหนดสถานะเบื้องต้นตาม Active และ วันหมดอายุ
             conditions = [
                 (~df_keys["is_active_bool"]),
                 (exp_series.isna()),
@@ -735,7 +730,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             choices_status = ["🔴 ระงับการใช้งาน", "🟢 ใช้งานได้ (ตลอดชีพ)", "🟢 กำลังใช้งาน"]
             df_keys["สถานะระบบ"] = np.select(conditions, choices_status, default="⏳ หมดอายุแล้ว")
 
-            # คำนวณเวลาคงเหลือเฉพาะแถวที่ยังใช้งานอยู่
             diff_delta = exp_series - now_ts
             days_left = diff_delta.dt.days
             hours_left = (diff_delta.dt.seconds // 3600)
@@ -804,15 +798,15 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 edited_df = st.data_editor(
                     df_disp[display_columns],
                     column_config={
-                        "เลือก": st.column_config.CheckboxColumn("✅"),
+                        "เลือก": st.column_config.CheckboxColumn("✅", width="small"),
                         "license_key": st.column_config.TextColumn("🔑 License Key", disabled=True),
                         "สถานะระบบ": st.column_config.TextColumn("สถานะ", disabled=True),
                         "เวลาคงเหลือ": st.column_config.TextColumn("⏰ เวลาคงเหลือ", disabled=True),
-                        "display_tier": st.column_config.TextColumn("ระดับ (Key Type)", disabled=True),
-                        "display_screens": st.column_config.NumberColumn("จำนวนจอ", format="%d จอ", disabled=True),
+                        "display_tier": st.column_config.TextColumn("ระดับ", disabled=True),
+                        "display_screens": st.column_config.NumberColumn("จอ", format="%d", disabled=True, width="small"),
                         "วันหมดอายุ": st.column_config.TextColumn("วันหมดอายุ", disabled=True),
                         "hwid": st.column_config.TextColumn("HWID เครื่อง", disabled=True),
-                        "display_note": st.column_config.TextColumn("📝 ลูกค้า / บันทึก (Note)", disabled=True),
+                        "display_note": st.column_config.TextColumn("📝 บันทึก (Note)", disabled=True),
                     },
                     use_container_width=True,
                     hide_index=True,
@@ -917,7 +911,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                     try:
                         db_execute("""
-                            INSERT INTO licenses (license_key, max_sessions, key_type, "Note", expire_date, is_active)
+                            INSERT INTO licenses (license_key, max_sessions, key_type, note, expire_date, is_active)
                             VALUES (%s, %s, %s, %s, %s, TRUE);
                         """, (final_key, int(max_sessions), tier_type.lower(), customer_note.strip(), exp_str))
 
@@ -972,7 +966,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                 add_hours = st.number_input("+ชม. (Hours):", min_value=0, value=0, step=1)
                             with ad_m:
                                 add_mins = st.number_input("+นาที (Minutes):", min_value=0, value=0, step=1)
-                            cur_note_val = target_obj.get("Note") or target_obj.get("note") or ""
+                            cur_note_val = target_obj.get("note") or target_obj.get("Note") or ""
                             new_note = st.text_area("📝 แก้ไขบันทึก (Note):", value=cur_note_val, height=68)
                         with col_m2:
                             st.write("**สถานะ HWID ปัจจุบัน:**")
@@ -998,13 +992,13 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                     if reset_hwid_flag:
                                         db_execute("""
                                             UPDATE licenses
-                                            SET max_sessions = %s, "Note" = %s, is_active = %s, expire_date = %s, hwid = NULL
+                                            SET max_sessions = %s, note = %s, is_active = %s, expire_date = %s, hwid = NULL
                                             WHERE license_key = %s;
                                         """, (int(new_max_screens), new_note.strip(), is_act_val, final_expire_str, target_code))
                                     else:
                                         db_execute("""
                                             UPDATE licenses
-                                            SET max_sessions = %s, "Note" = %s, is_active = %s, expire_date = %s
+                                            SET max_sessions = %s, note = %s, is_active = %s, expire_date = %s
                                             WHERE license_key = %s;
                                         """, (int(new_max_screens), new_note.strip(), is_act_val, final_expire_str, target_code))
 
@@ -1095,7 +1089,6 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
     page_header("💰 ระบบบันทึกรายรับ-รายจ่าย & บัญชีร้าน", "ระบบจัดการการเงินครบวงจร บันทึกบัญชี แนบสลิป อนุมัติรายการรอยืนยัน สรุปกราฟ และส่งออกข้อมูล")
 
     def upload_slip_base64(file_bytes, filename):
-        """แปลงรูปสลิปเป็น Base64 เก็บตรงลง PostgreSQL โดยไม่ต้องพึ่ง Cloud Storage"""
         try:
             img = Image.open(io.BytesIO(file_bytes))
             if img.mode in ("RGBA", "P"):
@@ -1228,7 +1221,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             if not item.get("status"):
                 item["status"] = "completed"
 
-        pending_items = [item for item in acc_data if item.get("status") == "pending"]
+        pending_items = [item for item in acc_data if item.get("status"] == "pending"]
         if pending_items:
             st.warning(f"⚠️ มี **{len(pending_items)} รายการ** ที่อยู่ระหว่าง **รอยืนยัน / รอตรวจสอบยอด**")
             with st.expander("⏳ รายการที่รอยืนยัน (คลิกเพื่ออนุมัติ / ยกเลิก)", expanded=True):
@@ -1331,6 +1324,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                     log_admin_action("send_report", filter_period)
                     st.success("ส่งรายงานเข้า Discord แล้ว!")
 
+        # 📈 ปรับปรุงกราฟให้เรียงลำดับวันที่จากอดีตไปปัจจุบันอย่างถูกต้อง
         if not df_completed.empty:
             st.write("#### 📈 กราฟแนวโน้มรายรับ - รายจ่าย (เฉพาะรายการที่อนุมัติแล้ว)")
             chart_df = df_completed.copy()
@@ -1341,7 +1335,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             if "expense" not in pivot_chart.columns:
                 pivot_chart["expense"] = 0
             pivot_chart = pivot_chart.rename(columns={"income": "รายรับ (Income)", "expense": "รายจ่าย (Expense)"})
-            pivot_chart = pivot_chart.sort_index()
+            pivot_chart = pivot_chart.sort_index(ascending=True)  # เรียงจากวันแรกไปวันล่าสุด
             st.bar_chart(pivot_chart, color=["#22c55e", "#ef4444"], use_container_width=True)
 
         df_display = df_filtered.copy()
@@ -1362,7 +1356,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             label="📥 ดาวน์โหลดประวัติบัญชี (Export to CSV)",
             data=csv_data,
             file_name=f"accounting_report_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv",
+            mime="text/css",
         )
 
         st.divider()
@@ -1426,7 +1420,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                             try:
                                 db_execute("""
                                     UPDATE accounting_records
-                                    SET type = %s, amount = %s, category = %s, status = %s, note = %s, slip_url = %s, drive_file_id = %s, created_at = %s
+                                    ST type = %s, amount = %s, category = %s, status = %s, note = %s, slip_url = %s, drive_file_id = %s, created_at = %s
                                     WHERE id = %s;
                                 """, (
                                     "income" if "รายรับ" in edit_type else "expense",
@@ -1436,7 +1430,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                                 st.success(f"🎉 อัปเดตรายการ ID: {edit_id} เรียบร้อยแล้ว!")
                                 st.rerun()
                             except Exception as err:
-                                st.error(f"อัปเดตข้อมูลไม่สำเร็จ: {err}")
+                                st.error(f"อัปเดตไม่สำเร็จ: {err}")
 
         with tab_delete:
             del_options = [
