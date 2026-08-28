@@ -715,34 +715,40 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         df_keys = pd.DataFrame(raw_licenses) if raw_licenses else pd.DataFrame()
 
         if not df_keys.empty:
-            df_keys["display_note"] = df_keys.apply(lambda r: r.get("Note") or r.get("note") or "", axis=1)
-            df_keys["display_tier"] = df_keys.apply(lambda r: str(r.get("key_type") or "normal").capitalize(), axis=1)
-            df_keys["display_screens"] = df_keys.apply(lambda r: safe_int(r.get("max_sessions"), 1), axis=1)
-            df_keys["is_active_bool"] = df_keys.apply(lambda r: bool(r.get("is_active")), axis=1)
+            df_keys["display_note"] = df_keys.get("note", "").fillna("")
+            df_keys["display_tier"] = df_keys.get("key_type", "normal").astype(str).str.capitalize()
+            df_keys["display_screens"] = df_keys.get("max_sessions", 1).apply(lambda x: safe_int(x, 1))
+            df_keys["is_active_bool"] = df_keys.get("is_active", True).astype(bool)
 
-            def calculate_key_status(row):
-                if not row["is_active_bool"]:
-                    return "🔴 ระงับการใช้งาน", "ถูกระงับ"
-                exp_val = row.get("expire_date")
-                if not exp_val or pd.isna(exp_val):
-                    return "🟢 ใช้งานได้ (ตลอดชีพ)", "ไม่มีวันหมดอายุ"
-                exp_dt = parse_to_thai_datetime(exp_val)
-                if not exp_dt:
-                    return "🟢 กำลังใช้งาน", "-"
-                diff = exp_dt - now_thai_val
-                if diff.total_seconds() > 0:
-                    total_sec = int(diff.total_seconds())
-                    days = total_sec // 86400
-                    hours = (total_sec % 86400) // 3600
-                    mins = (total_sec % 3600) // 60
-                    if days > 0:
-                        return "🟢 กำลังใช้งาน", f"เหลือ {days}วัน {hours}ชม. {mins}น."
-                    return "🟢 กำลังใช้งาน", f"เหลือ {hours}ชม. {mins}น."
-                return "⏳ หมดอายุแล้ว", "หมดอายุ"
+            # 🚀 แปลงวันหมดอายุเป็น Datetime แบบรวดเร็วรอบเดียวจบ (Vectorized)
+            exp_series = pd.to_datetime(df_keys["expire_date"], errors="coerce")
+            now_ts = pd.Timestamp(now_thai_val.replace(tzinfo=None))
 
-            res_status = [calculate_key_status(r) for _, r in df_keys.iterrows()]
-            df_keys["สถานะระบบ"] = [s[0] for s in res_status]
-            df_keys["เวลาคงเหลือ"] = [s[1] for s in res_status]
+            # กำหนดสถานะเบื้องต้นตาม Active และ วันหมดอายุ
+            conditions = [
+                (~df_keys["is_active_bool"]),
+                (exp_series.isna()),
+                (exp_series > now_ts)
+            ]
+            choices_status = ["🔴 ระงับการใช้งาน", "🟢 ใช้งานได้ (ตลอดชีพ)", "🟢 กำลังใช้งาน"]
+            df_keys["สถานะระบบ"] = np.select(conditions, choices_status, default="⏳ หมดอายุแล้ว")
+
+            # คำนวณเวลาคงเหลือเฉพาะแถวที่ยังใช้งานอยู่
+            diff_delta = exp_series - now_ts
+            days_left = diff_delta.dt.days
+            hours_left = (diff_delta.dt.seconds // 3600)
+            mins_left = ((diff_delta.dt.seconds % 3600) // 60)
+
+            time_left_str = np.where(
+                exp_series.isna(), "ไม่มีวันหมดอายุ",
+                np.where(
+                    diff_delta.dt.total_seconds() <= 0, "หมดอายุ",
+                    np.where(days_left > 0, 
+                             "เหลือ " + days_left.astype(str) + "วัน " + hours_left.astype(str) + "ชม. " + mins_left.astype(str) + "น.",
+                             "เหลือ " + hours_left.astype(str) + "ชม. " + mins_left.astype(str) + "น.")
+                )
+            )
+            df_keys["เวลาคงเหลือ"] = time_left_str
 
             run_expiry_warning_check(df_keys)
 
