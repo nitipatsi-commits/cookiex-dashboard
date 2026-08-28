@@ -1,16 +1,18 @@
 import base64
 from datetime import date, datetime, timedelta, timezone
 import io
+import json
 import random
 import string
 import threading
 import time
 
 import pandas as pd
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import requests
 import streamlit as st
 from PIL import Image
-from supabase import create_client
 
 # ไลบรารีสำหรับ Google Drive API (สำรอง - ไม่บังคับใช้)
 try:
@@ -33,10 +35,8 @@ st.set_page_config(
 
 THAI_TZ = timezone(timedelta(hours=7))
 
-
 def now_thai():
     return datetime.now(THAI_TZ)
-
 
 # ==========================================
 # 🎨 THEME / CUSTOM CSS
@@ -111,17 +111,6 @@ def inject_theme():
             padding: 16px 18px;
             margin-bottom: 10px;
         }
-        .cx-pill {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 600;
-        }
-        .cx-pill-green { background: rgba(34,197,94,0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.35); }
-        .cx-pill-red { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.35); }
-        .cx-pill-yellow { background: rgba(234,179,8,0.15); color: #fbbf24; border: 1px solid rgba(234,179,8,0.35); }
-        .cx-pill-gray { background: rgba(148,163,184,0.15); color: #cbd5e1; border: 1px solid rgba(148,163,184,0.3); }
 
         .cx-section-title {
             font-size: 20px;
@@ -154,7 +143,6 @@ def inject_theme():
         unsafe_allow_html=True,
     )
 
-
 def sidebar_brand():
     st.sidebar.markdown(
         """
@@ -169,32 +157,49 @@ def sidebar_brand():
         unsafe_allow_html=True,
     )
 
-
 def page_header(title, subtitle=""):
     st.markdown(f'<div class="cx-section-title">{title}</div>', unsafe_allow_html=True)
     if subtitle:
         st.markdown(f'<div class="cx-section-sub">{subtitle}</div>', unsafe_allow_html=True)
 
-
 inject_theme()
 
 # ==========================================
-# 🟢 เชื่อมต่อ Supabase (อ่านจาก st.secrets เท่านั้น — ห้าม hardcode)
+# 🟢 เชื่อมต่อ PostgreSQL Database (Google Cloud VM)
 # ==========================================
-SUPABASE_URL = st.secrets.get("SUPABASE_URL", "")
-SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", "")
+DB_HOST = st.secrets.get("DB_HOST", "34.21.162.59")
+DB_PORT = int(st.secrets.get("DB_PORT", 5432))
+DB_NAME = st.secrets.get("DB_NAME", "cookiebot_db")
+DB_USER = st.secrets.get("DB_USER", "postgres")
+DB_PASS = st.secrets.get("DB_PASS", "MyPassword123")
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error(
-        "❌ ยังไม่ได้ตั้งค่า SUPABASE_URL / SUPABASE_KEY ใน st.secrets\n\n"
-        "กรุณาเพิ่มค่านี้ในไฟล์ `.streamlit/secrets.toml` หรือใน Secrets ของ Streamlit Cloud ก่อนใช้งาน:\n\n"
-        "```toml\nSUPABASE_URL = \"https://xxxx.supabase.co\"\nSUPABASE_KEY = \"xxxx\"\n```"
+def get_db_connection():
+    return psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASS,
+        connect_timeout=5
     )
-    st.stop()
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+def db_query(sql, params=None, fetch=True):
+    """ฟังก์ชันกลางสำหรับ SELECT ดึงข้อมูลเป็น List of Dicts"""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, params or ())
+            if fetch:
+                return cur.fetchall()
+            conn.commit()
+            return []
 
-# 🔒 อ่านค่า Webhook / Config อื่นๆ จาก st.secrets
+def db_execute(sql, params=None):
+    """ฟังก์ชันกลางสำหรับ INSERT, UPDATE, DELETE"""
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params or ())
+        conn.commit()
+
 ADMIN_DISCORD_WEBHOOK = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
 GDRIVE_FOLDER_ID = st.secrets.get("GDRIVE_FOLDER_ID", "")
 
@@ -202,7 +207,6 @@ GDRIVE_FOLDER_ID = st.secrets.get("GDRIVE_FOLDER_ID", "")
 # 🚨 WATCHDOG: เฝ้าระวังสถานะบอทและแจ้งเตือน Discord
 # ==========================================
 def check_and_alert_bot_health(bot_data_list):
-    """ตรวจสอบสถานะบอททั้งหมด และยิงแจ้งเตือนเข้า Discord เมื่อพบปัญหา (เว้นระยะ 30 นาทีต่อเครื่อง)"""
     webhook_url = ADMIN_DISCORD_WEBHOOK
     if not webhook_url or not bot_data_list:
         return
@@ -274,10 +278,6 @@ def check_and_alert_bot_health(bot_data_list):
         except Exception as ex:
             print(f"[watchdog] discord post failed: {ex}")
 
-
-# ==========================================
-# 🟢 แจ้งเตือน Discord: สร้าง/ต่ออายุ/แก้ไข License Key
-# ==========================================
 def send_discord_license_alert(action_title, key_code, tier, screens, expire_str, note=""):
     webhook_url = ADMIN_DISCORD_WEBHOOK
     if not webhook_url:
@@ -306,10 +306,6 @@ def send_discord_license_alert(action_title, key_code, tier, screens, expire_str
     except Exception as ex:
         print(f"[license_alert] discord post failed: {ex}")
 
-
-# ==========================================
-# 🟢 แจ้งเตือน Discord: คีย์ใกล้หมดอายุ (ล่วงหน้า)
-# ==========================================
 def send_discord_expiry_warning(key_code, tier, screens, expire_str, hours_left, note=""):
     webhook_url = ADMIN_DISCORD_WEBHOOK
     if not webhook_url:
@@ -334,9 +330,7 @@ def send_discord_expiry_warning(key_code, tier, screens, expire_str, hours_left,
     except Exception as ex:
         print(f"[expiry_warning] discord post failed: {ex}")
 
-
 def run_expiry_warning_check(df_keys):
-    """เช็คคีย์ที่จะหมดอายุใน 72 ชม. ข้างหน้า แล้วแจ้งเตือน Discord ล่วงหน้า (ครั้งเดียวต่อคีย์ ทุก 12 ชม.)"""
     if df_keys.empty or not ADMIN_DISCORD_WEBHOOK:
         return
     if "expiry_warned" not in st.session_state:
@@ -368,10 +362,6 @@ def run_expiry_warning_check(df_keys):
             )
             st.session_state.expiry_warned[k_code] = datetime.now()
 
-
-# ==========================================
-# 🕒 Helper: แปลงวันที่ทุกรูปแบบเป็น Datetime เวลาไทย
-# ==========================================
 def parse_to_thai_datetime(ts_val):
     if not ts_val or pd.isna(ts_val):
         return None
@@ -389,7 +379,6 @@ def parse_to_thai_datetime(ts_val):
     except Exception:
         return None
 
-
 def safe_format_thai_time(ts_val):
     if not ts_val or pd.isna(ts_val):
         return "ตลอดชีพ"
@@ -397,7 +386,6 @@ def safe_format_thai_time(ts_val):
     if dt:
         return dt.strftime("%Y-%m-%d %H:%M")
     return str(ts_val)[:16]
-
 
 def safe_float(val, default=0.0):
     try:
@@ -407,7 +395,6 @@ def safe_float(val, default=0.0):
     except (TypeError, ValueError):
         return default
 
-
 def safe_int(val, default=0):
     try:
         if val is None or (isinstance(val, float) and pd.isna(val)):
@@ -416,72 +403,37 @@ def safe_int(val, default=0):
     except (TypeError, ValueError):
         return default
 
-
 def generate_random_key(length=16):
     chars = string.ascii_uppercase + string.digits
     return "".join(random.choice(chars) for _ in range(length))
 
-
 def log_admin_action(action, detail=""):
-    """บันทึก audit log การกระทำของแอดมิน (best-effort — ไม่ทำให้แอปพังถ้า insert ไม่สำเร็จ)"""
     try:
-        supabase.table("admin_audit_log").insert({
-            "action": action,
-            "detail": detail,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }).execute()
+        db_execute(
+            "INSERT INTO admin_audit_log (action, detail, created_at) VALUES (%s, %s, NOW());",
+            (action, detail)
+        )
     except Exception as ex:
-        print(f"[audit_log] insert failed (ตาราง admin_audit_log อาจยังไม่ถูกสร้าง): {ex}")
+        print(f"[audit_log] insert failed: {ex}")
 
 # ==========================================
-# 🟢 อัปโหลดไฟล์ขึ้น Google Drive (สำรอง — ใช้เมื่อเปิดใช้งาน)
-# ==========================================
-def upload_slip_to_gdrive(file_bytes, filename, mimetype="image/jpeg"):
-    """อัปโหลดสลิปไปยังโฟลเดอร์ Google Drive และคืนค่า URL ดูรูปภาพ"""
-    if not HAS_GDRIVE:
-        raise ImportError("กรุณาติดตั้ง google-api-python-client และ google-auth ก่อนใช้งาน")
-    if "gcp_service_account" not in st.secrets:
-        raise ValueError("ยังไม่ได้ตั้งค่า [gcp_service_account] ใน st.secrets")
-
-    creds_info = dict(st.secrets["gcp_service_account"])
-    creds = service_account.Credentials.from_service_account_info(
-        creds_info, scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    service = build("drive", "v3", credentials=creds)
-
-    file_metadata = {"name": filename}
-    if GDRIVE_FOLDER_ID:
-        file_metadata["parents"] = [GDRIVE_FOLDER_ID]
-
-    media = MediaIoBaseUpload(io.BytesIO(file_bytes), mimetype=mimetype, resumable=True)
-    uploaded = service.files().create(
-        body=file_metadata, media_body=media, fields="id, name, webViewLink, webContentLink"
-    ).execute()
-    return uploaded
-
-
-# ==========================================
-# 🟢 Relay Worker: ยิงภาพ/ข้อความแจ้งเตือนเข้า Discord แบบพื้นหลัง
+# 🟢 Relay Worker: ยิงภาพ/ข้อความแจ้งเตือนเข้า Discord
 # ==========================================
 def discord_relay_worker():
     while True:
         try:
-            res = supabase.table("user_monitors").select("*").not_.is_("pending_alert_msg", "null").execute()
-            rows = res.data
+            rows = db_query("""
+                UPDATE user_monitors
+                SET pending_alert_msg = NULL, pending_alert_img = NULL
+                WHERE pending_alert_msg IS NOT NULL AND pending_alert_msg != ''
+                RETURNING id, license_key, hwid, pending_alert_msg, pending_alert_img;
+            """)
             if rows:
                 for row in rows:
-                    row_id = row.get("id")
                     msg = row.get("pending_alert_msg")
                     b64_img = row.get("pending_alert_img")
                     row_key = row.get("license_key") or row.get("hwid") or "Unknown"
 
-                    claim_res = supabase.table("user_monitors").update({
-                        "pending_alert_msg": None,
-                        "pending_alert_img": None,
-                    }).eq("id", row_id).not_.is_("pending_alert_msg", "null").execute()
-
-                    if not bool(claim_res.data):
-                        continue
                     if not msg or str(msg).strip() in ["[NULL]", "None", "null", ""]:
                         continue
 
@@ -502,10 +454,8 @@ def discord_relay_worker():
             print(f"[relay_worker] loop error: {ex}")
         time.sleep(3)
 
-
 _relay_worker_started = False
 _relay_worker_lock = threading.Lock()
-
 
 def start_relay_worker_once():
     global _relay_worker_started
@@ -514,20 +464,15 @@ def start_relay_worker_once():
             _relay_worker_started = True
             threading.Thread(target=discord_relay_worker, daemon=True).start()
 
-
 start_relay_worker_once()
 
 # ==========================================
-# 🔒 ระบบยืนยันตัวตนแอดมิน — พร้อม Rate Limit / Lockout กัน Brute-force
+# 🔒 ระบบยืนยันตัวตนแอดมิน
 # ==========================================
-ADMIN_PIN = st.secrets.get("ADMIN_PIN", "")
-if not ADMIN_PIN:
-    st.error("❌ ยังไม่ได้ตั้งค่า ADMIN_PIN ใน st.secrets — กรุณาตั้งค่าก่อนใช้งานระบบ")
-    st.stop()
-
-MAX_PIN_ATTEMPTS = 5          # จำนวนครั้งที่กรอกผิดได้ก่อนถูกล็อก
-LOCKOUT_SECONDS = 300          # ระยะเวลาที่ถูกล็อก (5 นาที) หลังกรอกผิดครบจำนวน
-ATTEMPT_WINDOW_SECONDS = 600   # นับจำนวนครั้งผิดภายในกรอบเวลานี้ (10 นาที) แล้วรีเซ็ต
+ADMIN_PIN = st.secrets.get("ADMIN_PIN", "1234")
+MAX_PIN_ATTEMPTS = 5
+LOCKOUT_SECONDS = 300
+ATTEMPT_WINDOW_SECONDS = 600
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -538,16 +483,13 @@ if "pin_first_fail_at" not in st.session_state:
 if "pin_locked_until" not in st.session_state:
     st.session_state.pin_locked_until = None
 
-
 def _reset_pin_attempts():
     st.session_state.pin_fail_count = 0
     st.session_state.pin_first_fail_at = None
     st.session_state.pin_locked_until = None
 
-
 def _register_pin_failure():
     now = datetime.now()
-    # ถ้าเกินกรอบเวลานับ ให้เริ่มนับใหม่
     if st.session_state.pin_first_fail_at and (now - st.session_state.pin_first_fail_at).total_seconds() > ATTEMPT_WINDOW_SECONDS:
         st.session_state.pin_fail_count = 0
         st.session_state.pin_first_fail_at = None
@@ -556,10 +498,8 @@ def _register_pin_failure():
         st.session_state.pin_first_fail_at = now
 
     st.session_state.pin_fail_count += 1
-
     if st.session_state.pin_fail_count >= MAX_PIN_ATTEMPTS:
         st.session_state.pin_locked_until = now + timedelta(seconds=LOCKOUT_SECONDS)
-
 
 def _is_locked_out():
     locked_until = st.session_state.pin_locked_until
@@ -571,14 +511,10 @@ def _is_locked_out():
         return False, 0
     return True, int(remaining)
 
-
 if not st.session_state.authenticated:
     inject_theme()
     st.markdown('<div class="cx-login-wrap">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="cx-brand-logo" style="margin:0 auto 14px auto;">⚡</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown('<div class="cx-brand-logo" style="margin:0 auto 14px auto;">⚡</div>', unsafe_allow_html=True)
     st.title("🔒 Cookie X Admin")
     st.caption("ระบบจัดการบอท Cookie X (กรุณากรอก PIN เพื่อเข้าใช้งาน)")
 
@@ -586,17 +522,14 @@ if not st.session_state.authenticated:
 
     if locked:
         mins, secs = divmod(remaining_sec, 60)
-        st.error(
-            f"🚫 กรอกรหัสผิดเกินกำหนด ({MAX_PIN_ATTEMPTS} ครั้ง) — ระบบล็อกชั่วคราว\n\n"
-            f"กรุณาลองใหม่อีกครั้งใน **{mins} นาที {secs} วินาที**"
-        )
+        st.error(f"🚫 กรอกรหัสผิดเกินกำหนด ({MAX_PIN_ATTEMPTS} ครั้ง) — ระบบล็อก {mins} นาที {secs} วินาที")
         st.button("🔄 ตรวจสอบสถานะอีกครั้ง")
     else:
         remaining_tries = MAX_PIN_ATTEMPTS - st.session_state.pin_fail_count
         pin_input = st.text_input("กรอกรหัส Admin PIN:", type="password", key="pin_input_box")
 
         if st.session_state.pin_fail_count > 0:
-            st.warning(f"⚠️ รหัสไม่ถูกต้อง — เหลือโอกาสอีก {remaining_tries} ครั้ง ก่อนถูกล็อกชั่วคราว")
+            st.warning(f"⚠️ รหัสไม่ถูกต้อง — เหลือโอกาสอีก {remaining_tries} ครั้ง")
 
         if st.button("เข้าสู่ระบบ", type="primary"):
             if pin_input == ADMIN_PIN:
@@ -608,12 +541,7 @@ if not st.session_state.authenticated:
             else:
                 _register_pin_failure()
                 log_admin_action("login_failed")
-                still_locked, still_remaining = _is_locked_out()
-                if still_locked:
-                    mins, secs = divmod(still_remaining, 60)
-                    st.error(f"🚫 กรอกผิดครบ {MAX_PIN_ATTEMPTS} ครั้ง — ระบบล็อก {mins} นาที {secs} วินาที")
-                else:
-                    st.error("รหัส PIN ไม่ถูกต้อง!")
+                st.error("รหัส PIN ไม่ถูกต้อง!")
                 st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -650,12 +578,10 @@ if menu == "🏠 ภาพรวม (Overview)":
 
     ov_col1, ov_col2 = st.columns(2)
 
-    # --- โซนบอท / เซสชัน ---
     with ov_col1:
         st.markdown("#### 🤖 สถานะบอท")
         try:
-            res_bots = supabase.table("user_monitors").select("*").execute()
-            bots = res_bots.data or []
+            bots = db_query("SELECT * FROM user_monitors;")
             total_bots = len(bots)
             running = len([b for b in bots if str(b.get("status", "")).upper() == "RUNNING"])
             crashed = len([b for b in bots if "CRASH" in str(b.get("status", "")).upper()])
@@ -670,25 +596,22 @@ if menu == "🏠 ภาพรวม (Overview)":
 
         st.markdown("#### 💻 เซสชันที่เปิดอยู่")
         try:
-            res_sess_ov = supabase.table("active_sessions").select("*").execute()
-            sess_ov = res_sess_ov.data or []
+            sess_ov = db_query("SELECT * FROM active_sessions;")
             st.metric("จอที่เปิดใช้งานตอนนี้", f"{len(sess_ov)} จอ")
         except Exception as e:
             st.error(f"โหลดข้อมูลเซสชันไม่สำเร็จ: {e}")
 
-    # --- โซนคีย์ / การเงิน ---
     with ov_col2:
         st.markdown("#### 🔑 License Keys")
         try:
-            res_keys_ov = supabase.table("licenses").select("*").execute()
-            keys_ov = res_keys_ov.data or []
+            keys_ov = db_query("SELECT * FROM licenses;")
             df_ov = pd.DataFrame(keys_ov) if keys_ov else pd.DataFrame()
 
             expiring_soon = 0
             expired_now = 0
             if not df_ov.empty:
                 for _, r in df_ov.iterrows():
-                    exp_val = r.get("expire_date") or r.get("expires_at")
+                    exp_val = r.get("expire_date")
                     if not exp_val or pd.isna(exp_val):
                         continue
                     exp_dt = parse_to_thai_datetime(exp_val)
@@ -709,8 +632,7 @@ if menu == "🏠 ภาพรวม (Overview)":
 
         st.markdown("#### 💰 การเงินเดือนนี้")
         try:
-            res_acc_ov = supabase.table("accounting_records").select("*").execute()
-            acc_ov = res_acc_ov.data or []
+            acc_ov = db_query("SELECT * FROM accounting_records;")
             if acc_ov:
                 df_acc_ov = pd.DataFrame(acc_ov)
                 df_acc_ov["created_at"] = pd.to_datetime(df_acc_ov["created_at"], errors="coerce")
@@ -730,23 +652,17 @@ if menu == "🏠 ภาพรวม (Overview)":
         except Exception as e:
             st.error(f"โหลดข้อมูลบัญชีไม่สำเร็จ: {e}")
 
-    st.divider()
-    st.caption("💡 เลือกเมนูด้านซ้ายเพื่อดูรายละเอียดและจัดการแต่ละระบบ")
-
 # ---------------------------------------------------------
-# 📊 TAB: LIVE MONITOR (พร้อม Watchdog + ค้นหา)
+# 📊 TAB: LIVE MONITOR
 # ---------------------------------------------------------
 elif menu == "📊 Live Monitor (มอนิเตอร์บอท)":
     page_header("📊 Live Bot Monitor", "มอนิเตอร์สถานะลูกค้าเรียลไทม์และสเปคฮาร์ดแวร์เครื่องลูกค้า")
 
-    top_c1, top_c2 = st.columns([1, 5])
-    with top_c1:
-        if st.button("🔄 รีเฟรชข้อมูลสด"):
-            st.rerun()
+    if st.button("🔄 รีเฟรชข้อมูลสด"):
+        st.rerun()
 
     try:
-        res = supabase.table("user_monitors").select("*").execute()
-        data = res.data
+        data = db_query("SELECT * FROM user_monitors ORDER BY last_seen DESC;")
         if data:
             check_and_alert_bot_health(data)
 
@@ -789,26 +705,25 @@ elif menu == "📊 Live Monitor (มอนิเตอร์บอท)":
 # 🔑 TAB: KEY MANAGER
 # ---------------------------------------------------------
 elif menu == "🔑 Key Manager (จัดการคีย์)":
-    page_header("🔑 License Key Manager", "ระบบจัดการคีย์ลูกค้า เชื่อมต่อฐานข้อมูลจริง กำหนดเวลา วัน/ชม./นาที (เวลาไทย UTC+7)")
+    page_header("🔑 License Key Manager", "ระบบจัดการคีย์ลูกค้า เชื่อมต่อ PostgreSQL กำหนดเวลา วัน/ชม./นาที (เวลาไทย UTC+7)")
 
     thai_tz = THAI_TZ
     now_thai_val = now_thai()
 
     try:
-        res_keys = supabase.table("licenses").select("*").execute()
-        raw_licenses = res_keys.data or []
+        raw_licenses = db_query("SELECT * FROM licenses ORDER BY id DESC;")
         df_keys = pd.DataFrame(raw_licenses) if raw_licenses else pd.DataFrame()
 
         if not df_keys.empty:
-            df_keys["display_note"] = df_keys.apply(lambda r: r.get("Note") if pd.notna(r.get("Note")) else (r.get("note") or ""), axis=1)
-            df_keys["display_tier"] = df_keys.apply(lambda r: str(r.get("key_type") or r.get("tier") or "normal").capitalize(), axis=1)
-            df_keys["display_screens"] = df_keys.apply(lambda r: safe_int(r.get("max_sessions") if pd.notna(r.get("max_sessions")) else r.get("max_concurrent"), 1), axis=1)
-            df_keys["is_active_bool"] = df_keys.apply(lambda r: bool(r.get("is_active")) if "is_active" in r and pd.notna(r.get("is_active")) else (str(r.get("status", "active")).lower() == "active"), axis=1)
+            df_keys["display_note"] = df_keys.apply(lambda r: r.get("Note") or r.get("note") or "", axis=1)
+            df_keys["display_tier"] = df_keys.apply(lambda r: str(r.get("key_type") or "normal").capitalize(), axis=1)
+            df_keys["display_screens"] = df_keys.apply(lambda r: safe_int(r.get("max_sessions"), 1), axis=1)
+            df_keys["is_active_bool"] = df_keys.apply(lambda r: bool(r.get("is_active")), axis=1)
 
             def calculate_key_status(row):
                 if not row["is_active_bool"]:
                     return "🔴 ระงับการใช้งาน", "ถูกระงับ"
-                exp_val = row.get("expire_date") or row.get("expires_at")
+                exp_val = row.get("expire_date")
                 if not exp_val or pd.isna(exp_val):
                     return "🟢 ใช้งานได้ (ตลอดชีพ)", "ไม่มีวันหมดอายุ"
                 exp_dt = parse_to_thai_datetime(exp_val)
@@ -829,7 +744,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             df_keys["สถานะระบบ"] = [s[0] for s in res_status]
             df_keys["เวลาคงเหลือ"] = [s[1] for s in res_status]
 
-            # 🔔 เช็คแจ้งเตือนคีย์ใกล้หมดอายุล่วงหน้า (feature ใหม่)
             run_expiry_warning_check(df_keys)
 
             active_count = len(df_keys[df_keys["สถานะระบบ"].str.contains("🟢")])
@@ -845,8 +759,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         m3.metric("💻 โควตาจอรันจริง", f"{total_screens:,} จอ")
         m4.metric("⏳ หมดอายุแล้ว", f"{expired_grace_count:,} คีย์")
 
-        st.write("")
-
         tab_table, tab_grace, tab_add, tab_manage = st.tabs([
             f"📋 รายการคีย์ทั้งหมด ({len(df_keys)})",
             f"⏳ คีย์หมดอายุ ({expired_grace_count})",
@@ -854,12 +766,11 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             "⚙️ แก้ไข / จัดการคีย์ (Manage)",
         ])
 
-        # --- TAB 1: ตารางคีย์ทั้งหมด + Bulk actions ---
         with tab_table:
             if not df_keys.empty:
                 f1, f2, f3 = st.columns([2, 1, 1])
                 with f1:
-                    search_txt = st.text_input("🔍 ค้นหาคีย์ / ชื่อลูกค้า (Note) / HWID:", placeholder="พิมพ์ค้นหา เช่น พี่นิว, เต้ NB...", key="s_all_keys")
+                    search_txt = st.text_input("🔍 ค้นหาคีย์ / ชื่อลูกค้า / HWID:", placeholder="พิมพ์ค้นหา...", key="s_all_keys")
                 with f2:
                     filter_st = st.selectbox("📌 กรองสถานะ:", ["ทั้งหมด", "🟢 กำลังใช้งาน", "⏳ หมดอายุแล้ว", "🔴 ระงับการใช้งาน"], key="f_st_keys")
                 with f3:
@@ -877,7 +788,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 if filter_tr != "ทั้งหมด":
                     df_disp = df_disp[df_disp["display_tier"] == filter_tr]
 
-                df_disp["วันหมดอายุ"] = df_disp.apply(lambda r: safe_format_thai_time(r.get("expire_date") or r.get("expires_at")), axis=1)
+                df_disp["วันหมดอายุ"] = df_disp.apply(lambda r: safe_format_thai_time(r.get("expire_date")), axis=1)
                 df_disp["เลือก"] = False
 
                 display_columns = ["เลือก", "license_key", "สถานะระบบ", "เวลาคงเหลือ", "display_tier", "display_screens", "วันหมดอายุ", "hwid", "display_note"]
@@ -890,7 +801,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         "สถานะระบบ": st.column_config.TextColumn("สถานะ", disabled=True),
                         "เวลาคงเหลือ": st.column_config.TextColumn("⏰ เวลาคงเหลือ", disabled=True),
                         "display_tier": st.column_config.TextColumn("ระดับ (Key Type)", disabled=True),
-                        "display_screens": st.column_config.NumberColumn("จำนวนจอ (Max Sessions)", format="%d จอ", disabled=True),
+                        "display_screens": st.column_config.NumberColumn("จำนวนจอ", format="%d จอ", disabled=True),
                         "วันหมดอายุ": st.column_config.TextColumn("วันหมดอายุ", disabled=True),
                         "hwid": st.column_config.TextColumn("HWID เครื่อง", disabled=True),
                         "display_note": st.column_config.TextColumn("📝 ลูกค้า / บันทึก (Note)", disabled=True),
@@ -908,32 +819,31 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         if st.button(f"⚡ ต่ออายุทั้งหมด +30 วัน ({len(selected_rows)} คีย์)", use_container_width=True):
                             new_exp = (now_thai_val + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
                             for kcode in selected_rows["license_key"]:
-                                supabase.table("licenses").update({"expire_date": new_exp, "is_active": True}).eq("license_key", kcode).execute()
+                                db_execute("UPDATE licenses SET expire_date = %s, is_active = TRUE WHERE license_key = %s;", (new_exp, kcode))
                             log_admin_action("bulk_renew_30d", f"{len(selected_rows)} keys")
                             st.success(f"ต่ออายุ {len(selected_rows)} คีย์เรียบร้อย!")
                             st.rerun()
                     with bulk_c2:
                         if st.button("🔴 ระงับทั้งหมดที่เลือก", use_container_width=True):
                             for kcode in selected_rows["license_key"]:
-                                supabase.table("licenses").update({"is_active": False}).eq("license_key", kcode).execute()
+                                db_execute("UPDATE licenses SET is_active = FALSE WHERE license_key = %s;", (kcode,))
                             log_admin_action("bulk_suspend", f"{len(selected_rows)} keys")
                             st.success(f"ระงับ {len(selected_rows)} คีย์เรียบร้อย!")
                             st.rerun()
                     with bulk_c3:
                         if st.button("🗑️ ลบทั้งหมดที่เลือก", use_container_width=True, type="primary"):
                             for kcode in selected_rows["license_key"]:
-                                supabase.table("licenses").delete().eq("license_key", kcode).execute()
+                                db_execute("DELETE FROM licenses WHERE license_key = %s;", (kcode,))
                             log_admin_action("bulk_delete", f"{len(selected_rows)} keys")
                             st.success(f"ลบ {len(selected_rows)} คีย์เรียบร้อย!")
                             st.rerun()
             else:
                 st.info("ยังไม่มีข้อมูล License Key ในระบบ")
 
-        # --- TAB 2: คีย์หมดอายุ ---
         with tab_grace:
             df_grace = df_keys[df_keys["สถานะระบบ"].str.contains("⏳")] if not df_keys.empty else pd.DataFrame()
             if not df_grace.empty:
-                st.warning("⚠️ รายการคีย์ด้านล่างนี้หมดอายุแล้ว สามารถกดต่ออายุให้ลูกค้า หรือกดลบทิ้งได้ทันที")
+                st.warning("⚠️ รายการคีย์ด้านล่างนี้หมดอายุแล้ว")
                 for _, r_exp in df_grace.iterrows():
                     k_code = r_exp["license_key"]
                     c1, c2 = st.columns([3, 1.5])
@@ -945,7 +855,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         with b1:
                             if st.button("⚡ ต่ออายุ 30 วัน", key=f"btn_rn_{k_code}"):
                                 new_exp_thai = (now_thai_val + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-                                supabase.table("licenses").update({"expire_date": new_exp_thai, "is_active": True}).eq("license_key", k_code).execute()
+                                db_execute("UPDATE licenses SET expire_date = %s, is_active = TRUE WHERE license_key = %s;", (new_exp_thai, k_code))
                                 send_discord_license_alert(
                                     action_title="ต่ออายุคีย์อัตโนมัติ (+30 วัน)",
                                     key_code=k_code, tier=str(r_exp.get("display_tier", "Normal")),
@@ -957,14 +867,13 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                 st.rerun()
                         with b2:
                             if st.button("🗑️ ลบทันที", key=f"btn_dl_{k_code}"):
-                                supabase.table("licenses").delete().eq("license_key", k_code).execute()
+                                db_execute("DELETE FROM licenses WHERE license_key = %s;", (k_code,))
                                 log_admin_action("delete_key", k_code)
                                 st.rerun()
                     st.write("---")
             else:
                 st.success("🎉 ไม่มีคีย์ที่หมดอายุค้างอยู่ในระบบ")
 
-        # --- TAB 3: สร้างคีย์ใหม่ ---
         with tab_add:
             with st.form("add_license_form_v2", clear_on_submit=True):
                 col_k1, col_k2 = st.columns(2)
@@ -998,17 +907,12 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         exp_str = None
                         exp_msg = "ตลอดชีพ (ไม่มีวันหมดอายุ)"
 
-                    key_payload = {
-                        "license_key": final_key,
-                        "max_sessions": int(max_sessions),
-                        "key_type": tier_type.lower(),
-                        "Note": customer_note.strip(),
-                        "expire_date": exp_str,
-                        "is_active": True,
-                    }
-
                     try:
-                        supabase.table("licenses").insert(key_payload).execute()
+                        db_execute("""
+                            INSERT INTO licenses (license_key, max_sessions, key_type, "Note", expire_date, is_active)
+                            VALUES (%s, %s, %s, %s, %s, TRUE);
+                        """, (final_key, int(max_sessions), tier_type.lower(), customer_note.strip(), exp_str))
+
                         send_discord_license_alert(
                             action_title="สร้าง License Key ใหม่", key_code=final_key, tier=tier_type,
                             screens=max_sessions, expire_str=exp_msg, note=customer_note.strip(),
@@ -1019,7 +923,6 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     except Exception as err:
                         st.error(f"สร้างคีย์ไม่สำเร็จ: {err}")
 
-        # --- TAB 4: แก้ไข / จัดการคีย์ ---
         with tab_manage:
             if not df_keys.empty:
                 manage_options = [
@@ -1033,7 +936,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                     target_obj = next((r for r in raw_licenses if r["license_key"] == target_code), None)
 
                     if target_obj:
-                        cur_exp_raw = target_obj.get("expire_date") or target_obj.get("expires_at")
+                        cur_exp_raw = target_obj.get("expire_date")
                         cur_exp_str = ""
                         cur_exp_dt = None
                         try:
@@ -1050,12 +953,9 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
                         col_m1, col_m2 = st.columns(2)
                         with col_m1:
-                            cur_sess = target_obj.get("max_sessions") if pd.notna(target_obj.get("max_sessions")) else 1
+                            cur_sess = target_obj.get("max_sessions") or 1
                             new_max_screens = st.number_input("💻 ปรับจำนวนจอ (Max Sessions):", min_value=1, value=safe_int(cur_sess, 1), step=1)
-                            edit_expire_text = st.text_input(
-                                "📅 วันหมดอายุ (พิมพ์แก้ไขตรงนี้ได้เลย รูปแบบ YYYY-MM-DD HH:MM:SS):",
-                                value=cur_exp_str,
-                            )
+                            edit_expire_text = st.text_input("📅 วันหมดอายุ (YYYY-MM-DD HH:MM:SS):", value=cur_exp_str)
                             st.write("**⏳ หรือ เพิ่มเวลาต่ออายุ (+วัน/+ชม./+นาที):**")
                             ad_d, ad_h, ad_m = st.columns(3)
                             with ad_d:
@@ -1076,13 +976,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         col_btn1, col_btn2 = st.columns([2, 2])
                         with col_btn1:
                             if st.button("💾 บันทึกการแก้ไข", type="primary"):
-                                update_data = {
-                                    "max_sessions": int(new_max_screens),
-                                    "Note": new_note.strip(),
-                                    "is_active": True if "Active" in new_active_status else False,
-                                }
-                                if reset_hwid_flag:
-                                    update_data["hwid"] = None
+                                is_act_val = True if "Active" in new_active_status else False
 
                                 added_delta = timedelta(days=int(add_days), hours=int(add_hours), minutes=int(add_mins))
                                 if added_delta.total_seconds() > 0:
@@ -1092,24 +986,34 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                                 else:
                                     final_expire_str = edit_expire_text.strip()
 
-                                update_data["expire_date"] = final_expire_str
-
                                 try:
-                                    supabase.table("licenses").update(update_data).eq("license_key", target_code).execute()
+                                    if reset_hwid_flag:
+                                        db_execute("""
+                                            UPDATE licenses
+                                            SET max_sessions = %s, "Note" = %s, is_active = %s, expire_date = %s, hwid = NULL
+                                            WHERE license_key = %s;
+                                        """, (int(new_max_screens), new_note.strip(), is_act_val, final_expire_str, target_code))
+                                    else:
+                                        db_execute("""
+                                            UPDATE licenses
+                                            SET max_sessions = %s, "Note" = %s, is_active = %s, expire_date = %s
+                                            WHERE license_key = %s;
+                                        """, (int(new_max_screens), new_note.strip(), is_act_val, final_expire_str, target_code))
+
                                     send_discord_license_alert(
                                         action_title="อัปเดตข้อมูล / แก้ไขเวลาคีย์", key_code=target_code,
                                         tier=str(target_obj.get("key_type", "normal")), screens=new_max_screens,
                                         expire_str=final_expire_str, note=new_note.strip(),
                                     )
                                     log_admin_action("update_key", target_code)
-                                    st.success(f"🎉 อัปเดตคีย์ `{target_code}` สำเร็จ! (วันหมดอายุ: {final_expire_str})")
+                                    st.success(f"🎉 อัปเดตคีย์ `{target_code}` สำเร็จ!")
                                     st.rerun()
                                 except Exception as err:
                                     st.error(f"อัปเดตไม่สำเร็จ: {err}")
                         with col_btn2:
                             if st.button("❌ ลบคีย์นี้ทิ้งถาวร"):
                                 try:
-                                    supabase.table("licenses").delete().eq("license_key", target_code).execute()
+                                    db_execute("DELETE FROM licenses WHERE license_key = %s;", (target_code,))
                                     log_admin_action("delete_key", target_code)
                                     st.success(f"ลบคีย์ `{target_code}` แล้ว!")
                                     st.rerun()
@@ -1122,7 +1026,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         st.error(f"เกิดข้อผิดพลาดในการดึงข้อมูล License: {e}")
 
 # ---------------------------------------------------------
-# 💻 TAB: ACTIVE SESSIONS — พร้อมค้นหา และ Kick Session
+# 💻 TAB: ACTIVE SESSIONS
 # ---------------------------------------------------------
 elif menu == "💻 Active Sessions (เซสชันจอสด)":
     page_header("💻 Active Sessions Control", "ตรวจสอบและจัดการเซสชันจอที่กำลังเปิดรันอยู่สดๆ ทั้งหมด")
@@ -1131,8 +1035,7 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
         st.rerun()
 
     try:
-        res_sess = supabase.table("active_sessions").select("*").execute()
-        sess_data = res_sess.data
+        sess_data = db_query("SELECT * FROM active_sessions ORDER BY id DESC;")
         if sess_data:
             df_sess = pd.DataFrame(sess_data)
             if "last_heartbeat" in df_sess.columns:
@@ -1162,9 +1065,9 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
                 ]
                 kick_sel = st.selectbox("เลือกเซสชันที่ต้องการตัดออก:", kick_options, key="sel_kick_sess")
                 if st.button("⛔ ตัดการเชื่อมต่อเซสชันนี้", type="primary"):
-                    kick_id = kick_sel.split("ID: ")[1].split(" |")[0]
+                    kick_id = int(kick_sel.split("ID: ")[1].split(" |")[0])
                     try:
-                        supabase.table("active_sessions").delete().eq("id", kick_id).execute()
+                        db_execute("DELETE FROM active_sessions WHERE id = %s;", (kick_id,))
                         log_admin_action("kick_session", kick_sel)
                         st.success(f"ตัดการเชื่อมต่อเซสชัน ID {kick_id} เรียบร้อยแล้ว!")
                         st.rerun()
@@ -1183,37 +1086,22 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
 elif menu == "💰 บันทึกรายรับ-รายจ่าย & สลิป (Accounting)":
     page_header("💰 ระบบบันทึกรายรับ-รายจ่าย & บัญชีร้าน", "ระบบจัดการการเงินครบวงจร บันทึกบัญชี แนบสลิป อนุมัติรายการรอยืนยัน สรุปกราฟ และส่งออกข้อมูล")
 
-    def upload_slip_to_supabase(file_bytes, filename, mimetype="image/jpeg"):
+    def upload_slip_base64(file_bytes, filename):
+        """แปลงรูปสลิปเป็น Base64 เก็บตรงลง PostgreSQL โดยไม่ต้องพึ่ง Cloud Storage"""
         try:
             img = Image.open(io.BytesIO(file_bytes))
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
-            img.thumbnail((1000, 1000), Image.Resampling.LANCZOS)
+            img.thumbnail((800, 800), Image.Resampling.LANCZOS)
             buffer = io.BytesIO()
-            img.save(buffer, format="JPEG", quality=75, optimize=True)
-            compressed_bytes = buffer.getvalue()
-            final_mime = "image/jpeg"
-            clean_name = filename.rsplit(".", 1)[0] + ".jpg"
+            img.save(buffer, format="JPEG", quality=70, optimize=True)
+            b64_str = base64.b64encode(buffer.getvalue()).decode("utf-8")
+            data_url = f"data:image/jpeg;base64,{b64_str}"
+            return {"id": filename, "webViewLink": data_url}
         except Exception as ex:
-            print(f"[accounting] image compress failed, using original bytes: {ex}")
-            compressed_bytes = file_bytes
-            final_mime = mimetype
-            clean_name = filename
-
-        file_path = f"receipts/{clean_name}"
-        supabase.storage.from_("slips").upload(
-            path=file_path, file=compressed_bytes, file_options={"content-type": final_mime}
-        )
-        public_url = supabase.storage.from_("slips").get_public_url(file_path)
-        return {"id": file_path, "webViewLink": public_url}
-
-    def delete_slip_from_supabase(file_path):
-        if not file_path:
-            return
-        try:
-            supabase.storage.from_("slips").remove([file_path])
-        except Exception as ex:
-            print(f"[accounting] delete old slip failed: {ex}")
+            print(f"[accounting] compress failed: {ex}")
+            b64_str = base64.b64encode(file_bytes).decode("utf-8")
+            return {"id": filename, "webViewLink": f"data:image/jpeg;base64,{b64_str}"}
 
     def send_discord_accounting_alert(tx_type, amount, category, note, status_text, slip_url=""):
         webhook_url = ADMIN_DISCORD_WEBHOOK
@@ -1235,8 +1123,6 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                 {"name": "📌 สถานะ", "value": status_badge, "inline": True},
                 {"name": "📝 หมายเหตุ / ลูกค้า", "value": note or "-", "inline": False},
             ]
-            if slip_url:
-                fields.append({"name": "📎 ลิงก์รูปสลิป", "value": f"[คลิกเพื่อดูสลิป]({slip_url})", "inline": False})
 
             payload = {
                 "embeds": [{
@@ -1273,9 +1159,6 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             print(f"[accounting] monthly report post failed: {ex}")
             return False
 
-    # ==========================================
-    # 1. ฟอร์มเพิ่มรายการใหม่
-    # ==========================================
     with st.expander("➕ เพิ่มรายการรายรับ / รายจ่ายใหม่", expanded=False):
         with st.form("accounting_form", clear_on_submit=True):
             col_t1, col_t2 = st.columns(2)
@@ -1288,10 +1171,10 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                 tx_date = st.date_input("วันที่ทำรายการ:", value=datetime.now().date())
                 tx_status = st.selectbox("📌 สถานะรายการ:", ["🟢 สำเร็จแล้ว (Completed)", "🟡 รอยืนยัน / รอตรวจสอบสลิป (Pending)"])
                 slip_file = st.file_uploader("📎 แนบรูปสลิปโอนเงิน (JPG / PNG):", type=["png", "jpg", "jpeg"])
-                extra_note = st.text_area("📝 หมายเหตุเพิ่มเติม (Note):", placeholder="เช่น คีย์ 7 วัน / โอนเข้ากสิกร นายนิธิภัทร", height=68)
+                extra_note = st.text_area("📝 หมายเหตุเพิ่มเติม (Note):", placeholder="เช่น คีย์ 7 วัน / โอนเข้ากสิกร", height=68)
 
             send_noti = st.checkbox("🔔 ส่งการแจ้งเตือนรายการนี้เข้าห้อง Discord", value=True)
-            submit_tx = st.form_submit_button("💾 บันทึกรายการและอัปโหลดสลิป")
+            submit_tx = st.form_submit_button("💾 บันทึกรายการ")
 
             if submit_tx:
                 if amount <= 0:
@@ -1300,32 +1183,28 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                     slip_url = ""
                     drive_file_id = ""
                     if slip_file is not None:
-                        with st.spinner("⏳ กำลังอัปโหลดสลิปไปยัง Supabase Storage..."):
+                        with st.spinner("⏳ กำลังแปลงรูปสลิป..."):
                             try:
                                 timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
                                 clean_filename = f"slip_{timestamp_prefix}_{slip_file.name}"
-                                upload_res = upload_slip_to_supabase(slip_file.getvalue(), clean_filename, mimetype=slip_file.type)
+                                upload_res = upload_slip_base64(slip_file.getvalue(), clean_filename)
                                 drive_file_id = upload_res.get("id", "")
                                 slip_url = upload_res.get("webViewLink", "")
-                                st.success("☁️ อัปโหลดสลิปสำเร็จเรียบร้อย!")
                             except Exception as ex:
-                                st.warning(f"⚠️ บันทึกข้อมูลได้ แต่อัปโหลดรูปสลิปไม่สำเร็จ: {ex}")
+                                st.warning(f"⚠️ เกิดข้อผิดพลาดกับรูปสลิป: {ex}")
 
-                    combined_note = ""
-                    if customer_ref.strip() and extra_note.strip():
-                        combined_note = f"{customer_ref.strip()} | {extra_note.strip()}"
-                    else:
-                        combined_note = customer_ref.strip() or extra_note.strip()
-
+                    combined_note = f"{customer_ref.strip()} | {extra_note.strip()}" if customer_ref.strip() and extra_note.strip() else (customer_ref.strip() or extra_note.strip())
                     status_val = "pending" if "รอยืนยัน" in tx_status else "completed"
-                    tx_payload = {
-                        "type": "income" if "รายรับ" in tx_type else "expense",
-                        "amount": amount, "category": category, "note": combined_note,
-                        "slip_url": slip_url, "drive_file_id": drive_file_id, "status": status_val,
-                        "created_at": datetime.combine(tx_date, datetime.now().time()).isoformat(),
-                    }
+                    created_at_val = datetime.combine(tx_date, datetime.now().time()).isoformat()
+
                     try:
-                        supabase.table("accounting_records").insert(tx_payload).execute()
+                        db_execute("""
+                            INSERT INTO accounting_records (type, amount, category, note, slip_url, drive_file_id, status, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+                        """, (
+                            "income" if "รายรับ" in tx_type else "expense",
+                            amount, category, combined_note, slip_url, drive_file_id, status_val, created_at_val
+                        ))
                         if send_noti:
                             send_discord_accounting_alert(tx_type, amount, category, combined_note, status_val, slip_url)
                         log_admin_action("add_accounting_record", f"{category} ฿{amount:,.2f}")
@@ -1334,13 +1213,9 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                     except Exception as err:
                         st.error(f"บันทึกฐานข้อมูลไม่สำเร็จ: {err}")
 
-    # ==========================================
-    # 2. รายการรอยืนยัน (Pending Review Box)
-    # ==========================================
     acc_data = []
     try:
-        res_acc = supabase.table("accounting_records").select("*").order("created_at", desc=True).execute()
-        acc_data = res_acc.data or []
+        acc_data = db_query("SELECT * FROM accounting_records ORDER BY created_at DESC;")
         for item in acc_data:
             if not item.get("status"):
                 item["status"] = "completed"
@@ -1358,18 +1233,21 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                         st.caption(f"📝 {p_item.get('note','') or 'ไม่มีหมายเหตุ'} | 📅 {str(p_item.get('created_at',''))[:16]}")
                     with p_col2:
                         if p_item.get("slip_url"):
-                            st.markdown(f"[📂 คลิกดูรูปสลิป]({p_item['slip_url']})")
+                            if p_item["slip_url"].startswith("data:image"):
+                                st.image(p_item["slip_url"], width=140)
+                            else:
+                                st.markdown(f"[📂 คลิกดูรูปสลิป]({p_item['slip_url']})")
                         else:
                             st.caption("ไม่มีรูปสลิป")
                     with p_col3:
                         if st.button("✅ อนุมัติยอด", key=f"apprv_{p_id}", type="primary"):
-                            supabase.table("accounting_records").update({"status": "completed"}).eq("id", p_id).execute()
+                            db_execute("UPDATE accounting_records SET status = 'completed' WHERE id = %s;", (p_id,))
                             log_admin_action("approve_tx", str(p_id))
                             st.success(f"อนุมัติรายการ ID {p_id} เรียบร้อย!")
                             st.rerun()
                     with p_col4:
                         if st.button("❌ ปฏิเสธ", key=f"reject_{p_id}"):
-                            supabase.table("accounting_records").update({"status": "rejected"}).eq("id", p_id).execute()
+                            db_execute("UPDATE accounting_records SET status = 'rejected' WHERE id = %s;", (p_id,))
                             log_admin_action("reject_tx", str(p_id))
                             st.info(f"ปฏิเสธรายการ ID {p_id} แล้ว")
                             st.rerun()
@@ -1379,9 +1257,6 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
 
     st.divider()
 
-    # ==========================================
-    # 3. ตัวกรองข้อมูล & รายงานสรุปยอด
-    # ==========================================
     st.subheader("📊 สรุปยอดบัญชีและประวัติรายการ")
 
     if acc_data:
@@ -1438,9 +1313,8 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
         m1.metric("🟢 รายรับจริง (อนุมัติแล้ว)", f"฿ {total_income:,.2f}")
         m2.metric("🔴 รายจ่ายจริง (อนุมัติแล้ว)", f"฿ {total_expense:,.2f}")
         m3.metric("💵 กำไรสุทธิ (Net)", f"฿ {net_profit:,.2f}", delta=f"{net_profit:,.2f}")
-        m4.metric("🟡 ยอดรอยืนยัน", f"฿ {pending_income:,.2f}", help="ยอดเงินที่ยังรอการตรวจสอบสลิป")
+        m4.metric("🟡 ยอดรอยืนยัน", f"฿ {pending_income:,.2f}")
 
-        # 🟢 ปุ่มส่งรายงานสรุปเข้า Discord (feature ใหม่)
         report_c1, report_c2 = st.columns([1, 4])
         with report_c1:
             if st.button("📤 ส่งสรุปรายงานนี้เข้า Discord"):
@@ -1448,12 +1322,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                 if sent_ok:
                     log_admin_action("send_report", filter_period)
                     st.success("ส่งรายงานเข้า Discord แล้ว!")
-                elif not ADMIN_DISCORD_WEBHOOK:
-                    st.warning("ยังไม่ได้ตั้งค่า ADMIN_DISCORD_WEBHOOK ใน st.secrets")
-                else:
-                    st.error("ส่งรายงานไม่สำเร็จ ลองใหม่อีกครั้ง")
 
-        # กราฟสรุปยอด (เฉพาะที่อนุมัติแล้ว)
         if not df_completed.empty:
             st.write("#### 📈 กราฟแนวโน้มรายรับ - รายจ่าย (เฉพาะรายการที่อนุมัติแล้ว)")
             chart_df = df_completed.copy()
@@ -1467,7 +1336,6 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             pivot_chart = pivot_chart.sort_index()
             st.bar_chart(pivot_chart, color=["#22c55e", "#ef4444"], use_container_width=True)
 
-        # ตารางแสดงข้อมูล
         df_display = df_filtered.copy()
         df_display["ประเภท"] = df_display["type"].map({"income": "🟢 รายรับ", "expense": "🔴 รายจ่าย"})
         df_display["สถานะ"] = df_display["status"].map({
@@ -1476,19 +1344,10 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
         df_display["ยอดเงิน (บาท)"] = df_display["amount"].map(lambda x: f"{safe_float(x):,.2f}")
         df_display["วันที่"] = df_display["created_at"].dt.strftime("%Y-%m-%d %H:%M")
 
-        display_cols = ["id", "วันที่", "ประเภท", "สถานะ", "หมวดหมู่", "ยอดเงิน (บาท)", "note", "slip_url"]
+        display_cols = ["id", "วันที่", "ประเภท", "สถานะ", "หมวดหมู่", "ยอดเงิน (บาท)", "note"]
         valid_disp_cols = [c for c in display_cols if c in df_display.columns]
 
-        st.dataframe(
-            df_display[valid_disp_cols],
-            column_config={
-                "id": st.column_config.NumberColumn("ID", format="%d"),
-                "note": st.column_config.TextColumn("ลูกค้า / หมายเหตุ (Note)"),
-                "slip_url": st.column_config.LinkColumn("รูปสลิป", display_text="📂 เปิดดูรูปสลิป"),
-            },
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(df_display[valid_disp_cols], use_container_width=True, hide_index=True)
 
         csv_data = df_filtered.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
@@ -1500,9 +1359,6 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
 
         st.divider()
 
-        # ==========================================
-        # 4. เครื่องมือจัดการรายการ (แก้ไข & ลบ)
-        # ==========================================
         tab_edit, tab_delete = st.tabs(["✏️ แก้ไขรายการ (Edit)", "🗑️ ลบรายการ (Delete)"])
 
         with tab_edit:
@@ -1538,40 +1394,36 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                                 cur_date = datetime.now().date()
                             edit_date = st.date_input("วันที่ทำรายการ:", value=cur_date)
                             edit_note = st.text_area("📝 รายละเอียด / หมายเหตุ (Note):", value=edit_row.get("note", "") or "", height=68)
-                            new_slip_file = st.file_uploader("📎 อัปโหลดสลิปใหม่แทนที่รูปเดิม (เว้นว่างไว้ถ้าไม่เปลี่ยน):", type=["png", "jpg", "jpeg"])
+                            new_slip_file = st.file_uploader("📎 อัปโหลดสลิปใหม่:", type=["png", "jpg", "jpeg"])
 
                         save_edit_btn = st.form_submit_button("💾 บันทึกการแก้ไขข้อมูล")
 
                         if save_edit_btn:
                             final_slip_url = edit_row.get("slip_url", "")
                             final_drive_id = edit_row.get("drive_file_id", "")
-                            old_drive_id_to_delete = None
 
                             if new_slip_file is not None:
-                                # 🟢 อัปโหลดรูปใหม่ให้สำเร็จก่อน แล้วค่อยลบรูปเก่า (แก้ race condition เดิม)
-                                with st.spinner("⏳ กำลังอัปโหลดรูปใหม่ไปยัง Supabase..."):
-                                    try:
-                                        timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                        clean_filename = f"slip_{timestamp_prefix}_{new_slip_file.name}"
-                                        up_res = upload_slip_to_supabase(new_slip_file.getvalue(), clean_filename, mimetype=new_slip_file.type)
-                                        old_drive_id_to_delete = final_drive_id or None
-                                        final_drive_id = up_res.get("id", "")
-                                        final_slip_url = up_res.get("webViewLink", "")
-                                    except Exception as ex:
-                                        st.warning(f"⚠️ อัปโหลดรูปใหม่ไม่สำเร็จ รูปเดิมจะยังคงถูกใช้งานอยู่: {ex}")
+                                try:
+                                    timestamp_prefix = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                    clean_filename = f"slip_{timestamp_prefix}_{new_slip_file.name}"
+                                    up_res = upload_slip_base64(new_slip_file.getvalue(), clean_filename)
+                                    final_drive_id = up_res.get("id", "")
+                                    final_slip_url = up_res.get("webViewLink", "")
+                                except Exception as ex:
+                                    st.warning(f"⚠️ แปลงรูปสลิปไม่สำเร็จ: {ex}")
 
                             st_val = "completed" if "Completed" in edit_status else ("pending" if "Pending" in edit_status else "rejected")
-                            update_payload = {
-                                "type": "income" if "รายรับ" in edit_type else "expense",
-                                "amount": edit_amount, "category": edit_cat, "status": st_val,
-                                "note": edit_note.strip(), "slip_url": final_slip_url, "drive_file_id": final_drive_id,
-                                "created_at": datetime.combine(edit_date, datetime.now().time()).isoformat(),
-                            }
+                            created_at_val = datetime.combine(edit_date, datetime.now().time()).isoformat()
 
                             try:
-                                supabase.table("accounting_records").update(update_payload).eq("id", edit_id).execute()
-                                if old_drive_id_to_delete:
-                                    delete_slip_from_supabase(old_drive_id_to_delete)
+                                db_execute("""
+                                    UPDATE accounting_records
+                                    SET type = %s, amount = %s, category = %s, status = %s, note = %s, slip_url = %s, drive_file_id = %s, created_at = %s
+                                    WHERE id = %s;
+                                """, (
+                                    "income" if "รายรับ" in edit_type else "expense",
+                                    edit_amount, edit_cat, st_val, edit_note.strip(), final_slip_url, final_drive_id, created_at_val, edit_id
+                                ))
                                 log_admin_action("edit_accounting_record", str(edit_id))
                                 st.success(f"🎉 อัปเดตรายการ ID: {edit_id} เรียบร้อยแล้ว!")
                                 st.rerun()
@@ -1589,10 +1441,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             with col_del1:
                 if st.button("❌ ยืนยันลบรายการที่เลือก", type="primary", key="btn_confirm_del_tx"):
                     selected_tx_id = int(selected_del.split("ID: ")[1].split(" |")[0])
-                    target_row = next((r for r in acc_data if r["id"] == selected_tx_id), None)
-                    if target_row and target_row.get("drive_file_id"):
-                        delete_slip_from_supabase(target_row["drive_file_id"])
-                    supabase.table("accounting_records").delete().eq("id", selected_tx_id).execute()
+                    db_execute("DELETE FROM accounting_records WHERE id = %s;", (selected_tx_id,))
                     log_admin_action("delete_accounting_record", str(selected_tx_id))
                     st.success(f"ลบรายการ ID: {selected_tx_id} เรียบร้อยแล้ว!")
                     st.rerun()
