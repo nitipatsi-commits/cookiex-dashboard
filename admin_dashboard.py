@@ -7,6 +7,8 @@ import string
 import threading
 import time
 
+import numpy as np
+
 import pandas as pd
 import psycopg2
 from psycopg2.extras import RealDictCursor
