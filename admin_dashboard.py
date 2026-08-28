@@ -1221,7 +1221,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             if not item.get("status"):
                 item["status"] = "completed"
 
-        pending_items = [item for item in acc_data if item.get("status"] == "pending"]
+        pending_items = [item for item in acc_data if item.get("status") == "pending"]
         if pending_items:
             st.warning(f"⚠️ มี **{len(pending_items)} รายการ** ที่อยู่ระหว่าง **รอยืนยัน / รอตรวจสอบยอด**")
             with st.expander("⏳ รายการที่รอยืนยัน (คลิกเพื่ออนุมัติ / ยกเลิก)", expanded=True):
