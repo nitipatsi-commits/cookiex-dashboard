@@ -1060,7 +1060,7 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
         if sess_data:
             df_sess = pd.DataFrame(sess_data)
             if "last_heartbeat" in df_sess.columns:
-                df_sess["last_heartbeat"] = pd.to_datetime(df_sess["last_heartbeat"], errors="coerce").dt.tz_convert("Asia/Bangkok").dt.strftime("%Y-%m-%d %H:%M:%S")
+                df_sess["last_heartbeat"] = df_sess["last_heartbeat"].apply(safe_format_thai_time)
 
             st.write(f"📊 **จำนวนจอที่เปิดใช้งานอยู่ขณะนี้:** `{len(df_sess)} จอ`")
 
