@@ -722,13 +722,32 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             exp_series = pd.to_datetime(df_keys["expire_date"], errors="coerce")
             now_ts = pd.Timestamp(now_thai_val.replace(tzinfo=None))
 
-            conditions = [
-                (~df_keys["is_active_bool"]),
-                (exp_series.isna()),
-                (exp_series > now_ts)
-            ]
-            choices_status = ["🔴 ระงับการใช้งาน", "🟢 ใช้งานได้ (ตลอดชีพ)", "🟢 กำลังใช้งาน"]
-            df_keys["สถานะระบบ"] = np.select(conditions, choices_status, default="⏳ หมดอายุแล้ว")
+            # 🟢 [FIX] ตรวจสอบคีย์ที่กำลังออนไลน์อยู่จริงจาก active_sessions ที่ส่ง Heartbeat ภายใน 60 วินาที
+            active_sess_rows = db_query("""
+                SELECT DISTINCT license_key FROM active_sessions 
+                WHERE last_heartbeat >= NOW() - INTERVAL '60 seconds' OR last_heartbeat IS NULL;
+            """)
+            active_key_set = {str(r["license_key"]).strip() for r in active_sess_rows if r.get("license_key")} if active_sess_rows else set()
+
+            # กำหนดสถานะรายตัวอย่างแม่นยำ
+            status_list = []
+            for idx, row in df_keys.iterrows():
+                k_code = str(row.get("license_key", "")).strip()
+                is_act = row.get("is_active_bool", True)
+                exp_dt = exp_series.loc[idx]
+
+                if not is_act:
+                    status_list.append("🔴 ระงับการใช้งาน")
+                elif pd.notna(exp_dt) and exp_dt <= now_ts:
+                    status_list.append("⏳ หมดอายุแล้ว")
+                elif k_code in active_key_set:
+                    status_list.append("🟢 กำลังใช้งาน (ออนไลน์)")
+                elif pd.isna(exp_dt):
+                    status_list.append("🟢 ใช้งานได้ (ตลอดชีพ)")
+                else:
+                    status_list.append("⚪ พร้อมใช้งาน (ออฟไลน์)")
+
+            df_keys["สถานะระบบ"] = status_list
 
             diff_delta = exp_series - now_ts
             days_left = diff_delta.dt.days
@@ -757,7 +776,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("🔑 คีย์ทั้งหมด", f"{len(df_keys):,} คีย์")
-        m2.metric("🟢 พร้อมใช้งาน", f"{active_count:,} คีย์")
+        m2.metric("🟢 พร้อมใช้งาน/ออนไลน์", f"{active_count:,} คีย์")
         m3.metric("💻 โควตาจอรันจริง", f"{total_screens:,} จอ")
         m4.metric("⏳ หมดอายุแล้ว", f"{expired_grace_count:,} คีย์")
 
@@ -774,7 +793,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                 with f1:
                     search_txt = st.text_input("🔍 ค้นหาคีย์ / ชื่อลูกค้า / HWID:", placeholder="พิมพ์ค้นหา...", key="s_all_keys")
                 with f2:
-                    filter_st = st.selectbox("📌 กรองสถานะ:", ["ทั้งหมด", "🟢 กำลังใช้งาน", "⏳ หมดอายุแล้ว", "🔴 ระงับการใช้งาน"], key="f_st_keys")
+                    filter_st = st.selectbox("📌 กรองสถานะ:", ["ทั้งหมด", "🟢 กำลังใช้งาน (ออนไลน์)", "⚪ พร้อมใช้งาน (ออฟไลน์)", "⏳ หมดอายุแล้ว", "🔴 ระงับการใช้งาน"], key="f_st_keys")
                 with f3:
                     tier_list = ["ทั้งหมด"] + sorted(list(df_keys["display_tier"].dropna().unique()))
                     filter_tr = st.selectbox("⭐ ระดับ (Key Type):", tier_list, key="f_tr_keys")
@@ -1420,7 +1439,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                             try:
                                 db_execute("""
                                     UPDATE accounting_records
-                                    ST type = %s, amount = %s, category = %s, status = %s, note = %s, slip_url = %s, drive_file_id = %s, created_at = %s
+                                    SET type = %s, amount = %s, category = %s, status = %s, note = %s, slip_url = %s, drive_file_id = %s, created_at = %s
                                     WHERE id = %s;
                                 """, (
                                     "income" if "รายรับ" in edit_type else "expense",
