@@ -1056,7 +1056,19 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
         st.rerun()
 
     try:
-        sess_data = db_query("SELECT * FROM active_sessions ORDER BY id DESC;")
+        # 🟢 1. สั่งลบเซสชันที่ขาดการส่ง Heartbeat เกิน 60 วินาทีทิ้งอัตโนมัติ (เคลียร์ของเก่าที่ค้างออก)
+        db_execute("""
+            DELETE FROM active_sessions 
+            WHERE last_heartbeat < NOW() - INTERVAL '60 seconds';
+        """)
+
+        # 🟢 2. ดึงเฉพาะเซสชันที่มีชีวิตอยู่จริงในปัจจุบัน (ส่ง Heartbeat ภายใน 60 วินาที)
+        sess_data = db_query("""
+            SELECT * FROM active_sessions 
+            WHERE last_heartbeat >= NOW() - INTERVAL '60 seconds' OR last_heartbeat IS NULL
+            ORDER BY id DESC;
+        """)
+
         if sess_data:
             df_sess = pd.DataFrame(sess_data)
             if "last_heartbeat" in df_sess.columns:
