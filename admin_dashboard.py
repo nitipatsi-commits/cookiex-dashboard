@@ -172,7 +172,7 @@ DB_HOST = st.secrets.get("DB_HOST", "34.21.162.59")
 DB_PORT = int(st.secrets.get("DB_PORT", 5432))
 DB_NAME = st.secrets.get("DB_NAME", "cookiebot_db")
 DB_USER = st.secrets.get("DB_USER", "postgres")
-DB_PASS = st.secrets.get("DB_PASS", "MyPassword123")
+DB_PASS = st.secrets.get("DB_PASS", "Password")
 
 def get_db_connection():
     return psycopg2.connect(
