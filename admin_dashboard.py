@@ -174,7 +174,12 @@ DB_NAME = st.secrets.get("DB_NAME", "cookiebot_db")
 DB_USER = st.secrets.get("DB_USER", "postgres")
 DB_PASS = st.secrets.get("DB_PASS", "Password")
 
+@st.cache_resource
 def get_db_connection():
+    """🟢 [SPEED] ใช้ @st.cache_resource เพื่อ reuse connection เดิม
+    เดิมทุกครั้งที่เรียก db_query จะเปิด connection ใหม่ (TCP handshake + auth ทุกครั้ง)
+    ซึ่งเป็นสาเหตุหลักที่หน้าเว็บโหลดช้า โดยเฉพาะหน้า Overview ที่ query 4 ครั้งติดกัน
+    """
     return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -184,20 +189,64 @@ def get_db_connection():
         connect_timeout=5
     )
 
+
+def _get_live_conn():
+    """คืน connection ที่ใช้งานได้จริง ถ้าขาดไปแล้วจะสร้างใหม่ให้อัตโนมัติ"""
+    try:
+        conn = get_db_connection()
+        if getattr(conn, "closed", 1) != 0:
+            raise psycopg2.InterfaceError("connection closed")
+        # ตรวจว่ายังคุยกับ DB ได้จริง
+        with conn.cursor() as _c:
+            _c.execute("SELECT 1;")
+        return conn
+    except Exception:
+        # connection ตาย -> ล้าง cache แล้วต่อใหม่
+        try:
+            get_db_connection.clear()
+        except Exception:
+            pass
+        return get_db_connection()
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def db_query_cached(sql, params=None):
+    """🟢 [SPEED] query ที่ cache ผลไว้ 15 วินาที
+    ใช้กับข้อมูลที่ไม่ต้อง real-time เป๊ะ (รายการคีย์, บัญชี, ภาพรวม)
+    กดรีเฟรชหน้าเดิมซ้ำๆ จะไม่ยิง DB ใหม่ทุกครั้ง
+    """
+    conn = _get_live_conn()
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, params or ())
+        return [dict(r) for r in cur.fetchall()]
+
+
 def db_query(sql, params=None, fetch=True):
-    with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, params or ())
-            if fetch:
-                return cur.fetchall()
-            conn.commit()
-            return []
+    """query แบบสดใหม่เสมอ (ไม่ cache) — ใช้กับข้อมูล real-time เช่นเซสชันจอสด"""
+    conn = _get_live_conn()
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(sql, params or ())
+        if fetch:
+            return cur.fetchall()
+        conn.commit()
+        return []
+
 
 def db_execute(sql, params=None):
-    with get_db_connection() as conn:
+    conn = _get_live_conn()
+    try:
         with conn.cursor() as cur:
             cur.execute(sql, params or ())
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        # ล้าง cache ทุกครั้งที่มีการเขียนข้อมูล เพื่อให้หน้าเว็บเห็นค่าล่าสุดทันที
+        try:
+            db_query_cached.clear()
+        except Exception:
+            pass
 
 ADMIN_DISCORD_WEBHOOK = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
 GDRIVE_FOLDER_ID = st.secrets.get("GDRIVE_FOLDER_ID", "")
@@ -556,6 +605,7 @@ menu = st.sidebar.radio(
         "📊 Live Monitor (มอนิเตอร์บอท)",
         "🔑 Key Manager (จัดการคีย์)",
         "💻 Active Sessions (เซสชันจอสด)",
+        "🚀 ปล่อยอัปเดต (App Versions)",
         "💰 บันทึกรายรับ-รายจ่าย & สลิป (Accounting)",
     ],
     label_visibility="collapsed",
@@ -580,7 +630,7 @@ if menu == "🏠 ภาพรวม (Overview)":
     with ov_col1:
         st.markdown("#### 🤖 สถานะบอท")
         try:
-            bots = db_query("SELECT * FROM user_monitors;")
+            bots = db_query_cached("SELECT status, current_step FROM user_monitors;")
             total_bots = len(bots)
             running = len([b for b in bots if str(b.get("status", "")).upper() == "RUNNING"])
             crashed = len([b for b in bots if "CRASH" in str(b.get("status", "")).upper()])
@@ -595,7 +645,7 @@ if menu == "🏠 ภาพรวม (Overview)":
 
         st.markdown("#### 💻 เซสชันที่เปิดอยู่")
         try:
-            sess_ov = db_query("SELECT * FROM active_sessions;")
+            sess_ov = db_query_cached("SELECT session_id FROM active_sessions;")
             st.metric("จอที่เปิดใช้งานตอนนี้", f"{len(sess_ov)} จอ")
         except Exception as e:
             st.error(f"โหลดข้อมูลเซสชันไม่สำเร็จ: {e}")
@@ -603,7 +653,7 @@ if menu == "🏠 ภาพรวม (Overview)":
     with ov_col2:
         st.markdown("#### 🔑 License Keys")
         try:
-            keys_ov = db_query("SELECT * FROM licenses;")
+            keys_ov = db_query_cached("SELECT * FROM licenses;")
             df_ov = pd.DataFrame(keys_ov) if keys_ov else pd.DataFrame()
 
             expiring_soon = 0
@@ -631,7 +681,7 @@ if menu == "🏠 ภาพรวม (Overview)":
 
         st.markdown("#### 💰 การเงินเดือนนี้")
         try:
-            acc_ov = db_query("SELECT * FROM accounting_records;")
+            acc_ov = db_query_cached("SELECT * FROM accounting_records;")
             if acc_ov:
                 df_acc_ov = pd.DataFrame(acc_ov)
                 df_acc_ov["created_at"] = pd.to_datetime(df_acc_ov["created_at"], errors="coerce")
@@ -710,7 +760,7 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
     now_thai_val = now_thai()
 
     try:
-        raw_licenses = db_query("SELECT * FROM licenses ORDER BY id DESC;")
+        raw_licenses = db_query_cached("SELECT * FROM licenses ORDER BY id DESC;")
         df_keys = pd.DataFrame(raw_licenses) if raw_licenses else pd.DataFrame()
 
         if not df_keys.empty:
@@ -1114,6 +1164,178 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
         st.error(f"เกิดข้อผิดพลาด: {e}")
 
 # ---------------------------------------------------------
+# 🚀 TAB: APP VERSIONS — ปล่อยอัปเดตเวอร์ชันใหม่ให้ผู้ใช้
+# ---------------------------------------------------------
+elif menu == "🚀 ปล่อยอัปเดต (App Versions)":
+    page_header("🚀 ปล่อยอัปเดตโปรแกรม", "ปล่อยเวอร์ชันใหม่ แก้ไขลิงก์ดาวน์โหลด และจัดการประวัติการอัปเดตทั้งหมด")
+
+    tab_release, tab_history = st.tabs(["📤 ปล่อยเวอร์ชันใหม่", "📜 ประวัติเวอร์ชัน (แก้ไข/ลบ)"])
+
+    # ---------- แท็บ 1: ปล่อยเวอร์ชันใหม่ ----------
+    with tab_release:
+        # แสดงเวอร์ชันล่าสุดที่ปล่อยไปแล้ว
+        try:
+            latest = db_query_cached(
+                "SELECT version_code, download_url, created_at FROM app_versions ORDER BY id DESC LIMIT 1;"
+            )
+            if latest:
+                lv = latest[0]
+                st.info(
+                    f"📌 เวอร์ชันล่าสุดในระบบ: **{lv.get('version_code', '-')}** "
+                    f"(ปล่อยเมื่อ {safe_format_thai_time(lv.get('created_at'))})"
+                )
+            else:
+                st.warning("⚠️ ยังไม่มีเวอร์ชันใดในระบบ — นี่จะเป็นเวอร์ชันแรกที่ปล่อย")
+        except Exception as e:
+            st.error(f"ดึงเวอร์ชันล่าสุดไม่สำเร็จ: {e}")
+
+        st.markdown("#### 📤 กรอกข้อมูลเวอร์ชันใหม่")
+
+        rel_c1, rel_c2 = st.columns(2)
+        with rel_c1:
+            new_version = st.text_input(
+                "เลขเวอร์ชัน (version_code)",
+                placeholder="เช่น 2.0.6",
+                help="ใส่เลขเวอร์ชันที่จะให้โปรแกรมฝั่งผู้ใช้เทียบ เช่น 2.0.6"
+            )
+        with rel_c2:
+            new_url = st.text_input(
+                "ลิงก์ดาวน์โหลด (download_url)",
+                placeholder="https://...",
+                help="ลิงก์ไฟล์ติดตั้ง/ไฟล์อัปเดตที่ผู้ใช้จะโหลด"
+            )
+
+        new_changelog = st.text_area(
+            "รายละเอียดการอัปเดต (changelog)",
+            placeholder="- แก้บั๊กการนับกล่องผิดพลาด\n- เพิ่มโหมด Party Run\n- ปรับความเร็วระบบกวาดป๊อปอัป",
+            height=160
+        )
+
+        st.divider()
+        confirm_release = st.checkbox("✅ ยืนยันว่าตรวจสอบลิงก์และเลขเวอร์ชันถูกต้องแล้ว")
+
+        if st.button("🚀 ปล่อยอัปเดตเวอร์ชันนี้", type="primary", use_container_width=True):
+            if not new_version.strip():
+                st.error("กรุณากรอกเลขเวอร์ชัน (version_code)")
+            elif not new_url.strip():
+                st.error("กรุณากรอกลิงก์ดาวน์โหลด (download_url)")
+            elif not confirm_release:
+                st.error("กรุณาติ๊กยืนยันก่อนปล่อยอัปเดต")
+            else:
+                try:
+                    # กันปล่อยเลขเวอร์ชันซ้ำ
+                    dup = db_query(
+                        "SELECT id FROM app_versions WHERE version_code = %s;",
+                        (new_version.strip(),)
+                    )
+                    if dup:
+                        st.error(f"❌ เวอร์ชัน {new_version.strip()} มีอยู่ในระบบแล้ว! กรุณาใช้เลขอื่น หรือไปแก้ไขในแท็บประวัติ")
+                    else:
+                        db_execute(
+                            """
+                            INSERT INTO app_versions (version_code, download_url, changelog, created_at)
+                            VALUES (%s, %s, %s, NOW());
+                            """,
+                            (new_version.strip(), new_url.strip(), new_changelog.strip())
+                        )
+                        log_admin_action("release_version", f"ปล่อยเวอร์ชัน {new_version.strip()}")
+
+                        # แจ้งเตือน Discord (ถ้าตั้งค่า webhook ไว้)
+                        if ADMIN_DISCORD_WEBHOOK:
+                            try:
+                                requests.post(
+                                    ADMIN_DISCORD_WEBHOOK,
+                                    json={
+                                        "embeds": [{
+                                            "title": f"🚀 ปล่อยอัปเดตเวอร์ชัน {new_version.strip()}",
+                                            "description": (new_changelog.strip() or "ไม่มีรายละเอียด")[:1900],
+                                            "color": 5814783,
+                                            "fields": [
+                                                {"name": "🔗 ลิงก์ดาวน์โหลด", "value": new_url.strip()[:1000], "inline": False}
+                                            ],
+                                            "footer": {"text": f"ปล่อยเมื่อ {now_thai().strftime('%Y-%m-%d %H:%M:%S')}"}
+                                        }]
+                                    },
+                                    timeout=10
+                                )
+                            except Exception:
+                                pass
+
+                        st.success(f"✅ ปล่อยเวอร์ชัน {new_version.strip()} เรียบร้อยแล้ว!")
+                        st.balloons()
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"ปล่อยอัปเดตไม่สำเร็จ: {e}")
+
+    # ---------- แท็บ 2: ประวัติเวอร์ชัน ----------
+    with tab_history:
+        try:
+            versions = db_query_cached(
+                "SELECT id, version_code, download_url, changelog, created_at FROM app_versions ORDER BY id DESC;"
+            )
+
+            if not versions:
+                st.info("ยังไม่มีประวัติการปล่อยเวอร์ชันในระบบ")
+            else:
+                df_ver = pd.DataFrame(versions)
+                if "created_at" in df_ver.columns:
+                    df_ver["created_at"] = df_ver["created_at"].apply(safe_format_thai_time)
+
+                st.markdown(f"#### 📜 ประวัติทั้งหมด ({len(versions)} เวอร์ชัน)")
+                st.dataframe(df_ver, use_container_width=True, hide_index=True)
+
+                st.divider()
+                ed_c1, ed_c2 = st.columns(2)
+
+                # --- แก้ไขเวอร์ชัน ---
+                with ed_c1:
+                    st.markdown("##### ✏️ แก้ไขเวอร์ชัน")
+                    ver_options = {
+                        f"{v.get('version_code', '-')} (ID: {v.get('id')})": v
+                        for v in versions
+                    }
+                    pick_edit = st.selectbox("เลือกเวอร์ชันที่จะแก้ไข", list(ver_options.keys()), key="ver_edit_pick")
+                    if pick_edit:
+                        target = ver_options[pick_edit]
+                        ed_url = st.text_input("ลิงก์ดาวน์โหลดใหม่", value=str(target.get("download_url") or ""), key="ver_edit_url")
+                        ed_log = st.text_area("changelog ใหม่", value=str(target.get("changelog") or ""), height=120, key="ver_edit_log")
+
+                        if st.button("💾 บันทึกการแก้ไข", use_container_width=True):
+                            try:
+                                db_execute(
+                                    "UPDATE app_versions SET download_url = %s, changelog = %s WHERE id = %s;",
+                                    (ed_url.strip(), ed_log.strip(), target.get("id"))
+                                )
+                                log_admin_action("edit_version", f"แก้ไขเวอร์ชัน {target.get('version_code')}")
+                                st.success("บันทึกการแก้ไขเรียบร้อยแล้ว!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"แก้ไขไม่สำเร็จ: {e}")
+
+                # --- ลบเวอร์ชัน ---
+                with ed_c2:
+                    st.markdown("##### 🗑️ ลบเวอร์ชัน")
+                    st.caption("⚠️ ลบแล้วกู้คืนไม่ได้ ผู้ใช้ที่ยังไม่อัปเดตจะไม่เห็นเวอร์ชันนี้อีก")
+                    pick_del = st.selectbox("เลือกเวอร์ชันที่จะลบ", list(ver_options.keys()), key="ver_del_pick")
+                    confirm_del = st.checkbox("ยืนยันการลบเวอร์ชันนี้", key="ver_del_confirm")
+
+                    if st.button("🗑️ ลบเวอร์ชันนี้ถาวร", use_container_width=True):
+                        if not confirm_del:
+                            st.error("กรุณาติ๊กยืนยันก่อนลบ")
+                        else:
+                            try:
+                                target_del = ver_options[pick_del]
+                                db_execute("DELETE FROM app_versions WHERE id = %s;", (target_del.get("id"),))
+                                log_admin_action("delete_version", f"ลบเวอร์ชัน {target_del.get('version_code')}")
+                                st.success("ลบเวอร์ชันเรียบร้อยแล้ว!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"ลบไม่สำเร็จ: {e}")
+
+        except Exception as e:
+            st.error(f"โหลดประวัติเวอร์ชันไม่สำเร็จ: {e}")
+
+# ---------------------------------------------------------
 # 💰 TAB: บันทึกรายรับ-รายจ่าย & สลิป (Accounting)
 # ---------------------------------------------------------
 elif menu == "💰 บันทึกรายรับ-รายจ่าย & สลิป (Accounting)":
@@ -1247,7 +1469,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
 
     acc_data = []
     try:
-        acc_data = db_query("SELECT * FROM accounting_records ORDER BY created_at DESC;")
+        acc_data = db_query_cached("SELECT * FROM accounting_records ORDER BY created_at DESC;")
         for item in acc_data:
             if not item.get("status"):
                 item["status"] = "completed"
