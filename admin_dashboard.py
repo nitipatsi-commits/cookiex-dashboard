@@ -170,7 +170,7 @@ inject_theme()
 # ==========================================
 DB_HOST = st.secrets.get("DB_HOST", "34.87.134.194")
 DB_PORT = int(st.secrets.get("DB_PORT", 5432))
-DB_NAME = st.secrets.get("DB_NAME", "cookiebot-db-new")
+DB_NAME = st.secrets.get("DB_NAME", "cookiebot-db")
 DB_USER = st.secrets.get("DB_USER", "postgres")
 DB_PASS = st.secrets.get("DB_PASS", "passwd")
 
