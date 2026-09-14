@@ -138,14 +138,7 @@ DB_PASS = _get_secret("DB_PASS", "passwd")
 
 @st.cache_resource
 def get_db_connection():
-    """🟢 [SPEED] ใช้ @st.cache_resource เพื่อ reuse connection เดิม
-    เดิมทุกครั้งที่เรียก db_query จะเปิด connection ใหม่ (TCP handshake + auth ทุกครั้ง)
-    ซึ่งเป็นสาเหตุหลักที่หน้าเว็บโหลดช้า โดยเฉพาะหน้า Overview ที่ query 4 ครั้งติดกัน
-
-    🟢 [FIX] autocommit=True — เดิม db_query (SELECT) ไม่ commit ทำให้ connection
-    ค้างใน transaction เปิดเป็นวัน ๆ ถือ lock ตารางไว้ตลอด จน ALTER TABLE ทำไม่ได้
-    และเสี่ยง bloat ตาราง เปลี่ยนเป็น autocommit ทุก statement จบในตัว
-    """
+    """เปิด connection ใหม่แบบ autocommit และกำหนด timeout ป้องกันการค้าง"""
     conn = psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -179,42 +172,33 @@ def _get_live_conn():
 
 @st.cache_data(ttl=15, show_spinner=False)
 def db_query_cached(sql, params=None):
-    """🟢 [SPEED] query ที่ cache ผลไว้ 15 วินาที
-    ใช้กับข้อมูลที่ไม่ต้อง real-time เป๊ะ (รายการคีย์, บัญชี, ภาพรวม)
-    กดรีเฟรชหน้าเดิมซ้ำๆ จะไม่ยิง DB ใหม่ทุกครั้ง
-    """
-    conn = _get_live_conn()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(sql, params or ())
-        return [dict(r) for r in cur.fetchall()]
+    """🟢 [SPEED] query ที่ cache ผลไว้ 15 วินาที ดึงเสร็จปิด connection ทันที"""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, params or ())
+            return [dict(r) for r in cur.fetchall()]
 
 
 def db_query(sql, params=None, fetch=True):
-    """query แบบสดใหม่เสมอ (ไม่ cache) — ใช้กับข้อมูล real-time เช่นเซสชันจอสด"""
-    conn = _get_live_conn()
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(sql, params or ())
-        if fetch:
-            return cur.fetchall()
-        conn.commit()
-        return []
+    """query สดใหม่ ทำงานจบแล้วปิด connection คืนระบบทันที ไม่แช่ค้าง"""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, params or ())
+            if fetch:
+                return cur.fetchall()
+            return []
 
 
 def db_execute(sql, params=None):
-    conn = _get_live_conn()
-    try:
+    """รันคำสั่ง INSERT/UPDATE/DELETE เสร็จแล้วปิดคืน connection ทันที"""
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params or ())
-        conn.commit()
+    # ล้าง cache ทันทีเมื่อมีการเขียนข้อมูลใหม่
+    try:
+        db_query_cached.clear()
     except Exception:
-        conn.rollback()
-        raise
-    finally:
-        # ล้าง cache ทุกครั้งที่มีการเขียนข้อมูล เพื่อให้หน้าเว็บเห็นค่าล่าสุดทันที
-        try:
-            db_query_cached.clear()
-        except Exception:
-            pass
+        pass
 
 ADMIN_DISCORD_WEBHOOK = _get_secret("ADMIN_DISCORD_WEBHOOK", "")
 GDRIVE_FOLDER_ID = _get_secret("GDRIVE_FOLDER_ID", "")
