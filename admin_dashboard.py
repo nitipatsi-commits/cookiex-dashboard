@@ -168,11 +168,11 @@ inject_theme()
 # ==========================================
 # 🟢 เชื่อมต่อ PostgreSQL Database (Google Cloud VM)
 # ==========================================
-DB_HOST = st.secrets.get("DB_HOST", "34.21.162.59")
+DB_HOST = st.secrets.get("DB_HOST", "34.87.134.194")
 DB_PORT = int(st.secrets.get("DB_PORT", 5432))
-DB_NAME = st.secrets.get("DB_NAME", "cookiebot_db")
+DB_NAME = st.secrets.get("DB_NAME", "cookiebot-db-new")
 DB_USER = st.secrets.get("DB_USER", "postgres")
-DB_PASS = st.secrets.get("DB_PASS", "Password")
+DB_PASS = st.secrets.get("DB_PASS", "passwd")
 
 @st.cache_resource
 def get_db_connection():
