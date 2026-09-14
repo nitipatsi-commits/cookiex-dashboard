@@ -1,5 +1,7 @@
 streamlit
-pandas
+streamlit-autorefresh
 psycopg2-binary
+pandas
+altair
 requests
 pillow
