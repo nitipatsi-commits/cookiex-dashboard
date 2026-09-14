@@ -9,6 +9,7 @@ import time
 
 import numpy as np
 import pandas as pd
+import altair as alt
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import requests
@@ -23,6 +24,13 @@ try:
     HAS_GDRIVE = True
 except ImportError:
     HAS_GDRIVE = False
+
+# 🟢 Auto-refresh (ถ้ามีติดตั้ง streamlit-autorefresh — pip install streamlit-autorefresh)
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
 
 # ==========================================
 # 🟢 ตั้งค่าหน้าเว็บ (ต้องอยู่หลัง import streamlit as st เสมอ)
@@ -45,100 +53,40 @@ def now_thai():
 def inject_theme():
     st.markdown(
         """
+        <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Prompt:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
         <style>
-        :root {
-            --cx-bg: #0b0f19;
-            --cx-panel: #121826;
-            --cx-panel-2: #161d2e;
-            --cx-border: #232b3d;
-            --cx-accent: #6366f1;
-            --cx-accent-2: #22d3ee;
-            --cx-green: #22c55e;
-            --cx-red: #ef4444;
-            --cx-yellow: #eab308;
-            --cx-text: #e5e7eb;
-            --cx-muted: #94a3b8;
-        }
-
-        html, body, [class*="css"] {
-            font-family: "Inter", "Noto Sans Thai", "Segoe UI", sans-serif;
-        }
-
-        [data-testid="stAppViewContainer"] {
-            background: radial-gradient(circle at 15% 0%, #151c2e 0%, var(--cx-bg) 45%);
-        }
-
-        [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #0e1420 0%, #0a0e17 100%);
-            border-right: 1px solid var(--cx-border);
-        }
-
-        [data-testid="stSidebar"] * {
-            color: var(--cx-text);
-        }
-
-        .cx-brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 6px 2px 18px 2px;
-            border-bottom: 1px solid var(--cx-border);
-            margin-bottom: 14px;
-        }
-        .cx-brand-logo {
-            width: 38px; height: 38px;
-            border-radius: 10px;
-            background: linear-gradient(135deg, var(--cx-accent), var(--cx-accent-2));
-            display: flex; align-items: center; justify-content: center;
-            font-size: 20px;
-            box-shadow: 0 0 18px rgba(99,102,241,0.45);
-        }
-        .cx-brand-title { font-weight: 700; font-size: 17px; line-height: 1.1; color: #fff; }
-        .cx-brand-sub { font-size: 11.5px; color: var(--cx-muted); }
-
-        div[data-testid="stMetric"] {
-            background: linear-gradient(145deg, var(--cx-panel), var(--cx-panel-2));
-            border: 1px solid var(--cx-border);
-            border-radius: 14px;
-            padding: 14px 16px 10px 16px;
-            box-shadow: 0 4px 18px rgba(0,0,0,0.25);
-        }
-        div[data-testid="stMetric"] label { color: var(--cx-muted) !important; }
-
-        .cx-card {
-            background: linear-gradient(145deg, var(--cx-panel), var(--cx-panel-2));
-            border: 1px solid var(--cx-border);
-            border-radius: 14px;
-            padding: 16px 18px;
-            margin-bottom: 10px;
-        }
-
-        .cx-section-title {
-            font-size: 20px;
-            font-weight: 700;
-            color: #fff;
-            margin-bottom: 2px;
-        }
-        .cx-section-sub {
-            color: var(--cx-muted);
-            font-size: 13px;
-            margin-bottom: 14px;
-        }
-
-        div.stButton > button {
-            border-radius: 10px;
-            border: 1px solid var(--cx-border);
-        }
-        div.stButton > button[kind="primary"] {
-            background: linear-gradient(135deg, var(--cx-accent), #4f46e5);
-            border: none;
-        }
-
-        .cx-login-wrap {
-            max-width: 420px;
-            margin: 6vh auto 0 auto;
-            text-align: center;
-        }
+        :root{--cx-bg:#0b131c;--cx-ink:#0b131c;--cx-panel:#182430;--cx-panel-2:#1f2d3a;--cx-border:#2a3a48;--cx-border-s:#1d2a36;--cx-accent:#ff4655;--cx-accent-d:#bd3944;--cx-green:#3ddc84;--cx-red:#ff4655;--cx-yellow:#f5c14e;--cx-cyan:#22d3ee;--cx-text:#ece8e1;--cx-muted:#9aa4ae;--cx-faint:#66727e}
+        html, body, [class*="css"]{font-family:"Prompt","Noto Sans Thai","Segoe UI",sans-serif}
+        [data-testid="stAppViewContainer"]{background:radial-gradient(circle at 15% 0%,#16202e 0%,var(--cx-bg) 45%)}
+        [data-testid="stSidebar"]{background:linear-gradient(180deg,#0e1620 0%,#0a0f17 100%);border-right:1px solid var(--cx-border)}
+        [data-testid="stSidebar"] *{color:var(--cx-text)}
+        .cx-brand{display:flex;align-items:center;gap:10px;padding:6px 2px 14px 2px;border-bottom:1px solid var(--cx-border);margin-bottom:8px}
+        .cx-brand-logo{width:38px;height:38px;background:linear-gradient(135deg,var(--cx-accent),var(--cx-accent-d));clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 0 18px rgba(255,70,85,0.45)}
+        .cx-brand-title{font-family:"Oswald",sans-serif;font-weight:600;font-size:17px;line-height:1.1;color:#fff;letter-spacing:0.14em}
+        .cx-brand-sub{font-family:"JetBrains Mono",monospace;font-size:9.5px;color:var(--cx-faint);letter-spacing:0.22em}
+        .cx-telemetry{font-family:"JetBrains Mono",monospace;font-size:9px;letter-spacing:0.18em;color:var(--cx-faint);padding:7px 2px 12px 2px;border-bottom:1px solid var(--cx-border-s);margin-bottom:12px}
+        .cx-telemetry b{color:var(--cx-green);font-weight:500}
+        div[data-testid="stMetric"]{background:linear-gradient(145deg,var(--cx-panel),var(--cx-panel-2));border:1px solid var(--cx-border);border-top:3px solid var(--cx-accent);border-radius:4px;padding:14px 16px 10px 16px;box-shadow:0 4px 18px rgba(0,0,0,0.35)}
+        div[data-testid="stMetric"] label{color:var(--cx-muted) !important}
+        div[data-testid="stMetric"] > div{font-family:"JetBrains Mono",monospace !important}
+        .cx-card{background:linear-gradient(145deg,var(--cx-panel),var(--cx-panel-2));border:1px solid var(--cx-border);border-left:3px solid var(--cx-accent);border-radius:4px;padding:16px 18px;margin-bottom:10px}
+        .cx-section-title{font-family:"Prompt",sans-serif;font-size:22px;font-weight:700;color:#fff;margin-bottom:4px}
+        .cx-section-sub{color:var(--cx-muted);font-size:13px;margin-bottom:4px}
+        .cx-rule{display:flex;align-items:center;gap:10px;margin:4px 0 16px 0}
+        .cx-rule::before{content:"";width:44px;height:3px;flex:none;background:var(--cx-accent);box-shadow:0 0 10px rgba(255,70,85,.55)}
+        .cx-rule::after{content:"";flex:1;height:1px;background:var(--cx-border)}
+        div.stButton > button{border-radius:4px;border:1px solid var(--cx-border);color:var(--cx-text);transition:border-color .2s,color .2s,background-color .2s}
+        div.stButton > button:hover{border-color:rgba(255,70,85,.6);color:#fff}
+        div.stButton > button[kind="primary"]{background:linear-gradient(135deg,var(--cx-accent),var(--cx-accent-d));border:none;clip-path:polygon(10px 0,100% 0,calc(100% - 10px) 100%,0 100%);color:#fff;font-weight:600;filter:drop-shadow(0 0 10px rgba(255,70,85,.3))}
+        div.stButton > button[kind="primary"]:hover{filter:drop-shadow(0 0 16px rgba(255,70,85,.5))}
+        div[data-testid="stFormSubmitButton"] > button{border-radius:4px}
+        [data-testid="stSidebar"] div[role="radiogroup"] label{border:1px solid transparent;border-radius:4px;padding:3px 8px;transition:background-color .15s}
+        [data-testid="stSidebar"] div[role="radiogroup"] label:hover{background:rgba(255,70,85,.08)}
+        div[data-testid="stDataFrame"]{border:1px solid var(--cx-border-s);border-radius:4px}
+        .cx-login-wrap{max-width:420px;margin:6vh auto 0 auto;text-align:center}
+        .cx-login-logo{width:52px;height:52px;margin:0 auto 16px auto;background:linear-gradient(135deg,var(--cx-accent),var(--cx-accent-d));clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px);display:flex;align-items:center;justify-content:center;font-size:26px;box-shadow:0 0 24px rgba(255,70,85,0.5)}
+        .cx-warn-banner{background:rgba(245,193,78,.08);border:1px solid rgba(245,193,78,.45);color:var(--cx-yellow);font-size:12.5px;padding:10px 14px;border-radius:4px;margin-bottom:14px}
+        h1, h2, h3{font-family:"Prompt",sans-serif;color:#fff}
         </style>
         """,
         unsafe_allow_html=True,
@@ -150,9 +98,13 @@ def sidebar_brand():
         <div class="cx-brand">
             <div class="cx-brand-logo">⚡</div>
             <div>
-                <div class="cx-brand-title">Cookie X</div>
-                <div class="cx-brand-sub">Admin Control Center</div>
+                <div class="cx-brand-title">COOKIE X</div>
+                <div class="cx-brand-sub">ADMIN CONSOLE</div>
             </div>
+        </div>
+        <div class="cx-telemetry">
+            CORE <b>v2.1.0</b> // SERVER <b>ONLINE</b><br>
+            NODE BKK-01 // LICENSE: POSTGRES
         </div>
         """,
         unsafe_allow_html=True,
@@ -162,25 +114,39 @@ def page_header(title, subtitle=""):
     st.markdown(f'<div class="cx-section-title">{title}</div>', unsafe_allow_html=True)
     if subtitle:
         st.markdown(f'<div class="cx-section-sub">{subtitle}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="cx-rule"></div>', unsafe_allow_html=True)
 
 inject_theme()
 
 # ==========================================
 # 🟢 เชื่อมต่อ PostgreSQL Database (Google Cloud VM)
 # ==========================================
-DB_HOST = st.secrets.get("DB_HOST", "34.87.134.194")
-DB_PORT = int(st.secrets.get("DB_PORT", 5432))
-DB_NAME = st.secrets.get("DB_NAME", "cookiebot-db")
-DB_USER = st.secrets.get("DB_USER", "postgres")
-DB_PASS = st.secrets.get("DB_PASS", "passwd")
+def _get_secret(key, default=""):
+    """🟢 [FIX] อ่านค่าจาก st.secrets อย่างปลอดภัย — เดิม st.secrets.get() โยน
+    StreamlitSecretNotFoundError ทั้งแอปถ้าไม่มีไฟล์ secrets.toml แม้จะใส่ default ไว้"""
+    try:
+        val = st.secrets.get(key, default)
+        return default if val is None else val
+    except Exception:
+        return default
+
+DB_HOST = _get_secret("DB_HOST", "34.87.134.194")
+DB_PORT = int(_get_secret("DB_PORT", 5432))
+DB_NAME = _get_secret("DB_NAME", "cookiebot-db-new")
+DB_USER = _get_secret("DB_USER", "postgres")
+DB_PASS = _get_secret("DB_PASS", "passwd")
 
 @st.cache_resource
 def get_db_connection():
     """🟢 [SPEED] ใช้ @st.cache_resource เพื่อ reuse connection เดิม
     เดิมทุกครั้งที่เรียก db_query จะเปิด connection ใหม่ (TCP handshake + auth ทุกครั้ง)
     ซึ่งเป็นสาเหตุหลักที่หน้าเว็บโหลดช้า โดยเฉพาะหน้า Overview ที่ query 4 ครั้งติดกัน
+
+    🟢 [FIX] autocommit=True — เดิม db_query (SELECT) ไม่ commit ทำให้ connection
+    ค้างใน transaction เปิดเป็นวัน ๆ ถือ lock ตารางไว้ตลอด จน ALTER TABLE ทำไม่ได้
+    และเสี่ยง bloat ตาราง เปลี่ยนเป็น autocommit ทุก statement จบในตัว
     """
-    return psycopg2.connect(
+    conn = psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
         dbname=DB_NAME,
@@ -188,6 +154,8 @@ def get_db_connection():
         password=DB_PASS,
         connect_timeout=5
     )
+    conn.autocommit = True
+    return conn
 
 
 def _get_live_conn():
@@ -248,8 +216,8 @@ def db_execute(sql, params=None):
         except Exception:
             pass
 
-ADMIN_DISCORD_WEBHOOK = st.secrets.get("ADMIN_DISCORD_WEBHOOK", "")
-GDRIVE_FOLDER_ID = st.secrets.get("GDRIVE_FOLDER_ID", "")
+ADMIN_DISCORD_WEBHOOK = _get_secret("ADMIN_DISCORD_WEBHOOK", "")
+GDRIVE_FOLDER_ID = _get_secret("GDRIVE_FOLDER_ID", "")
 
 # ==========================================
 # 🚨 WATCHDOG: เฝ้าระวังสถานะบอทและแจ้งเตือน Discord
@@ -455,6 +423,22 @@ def generate_random_key(length=16):
     chars = string.ascii_uppercase + string.digits
     return "".join(random.choice(chars) for _ in range(length))
 
+def generate_ckx_key():
+    """🟢 สร้างคีย์รูปแบบ CKX-XXXX-XXXX-XXXX ตรงกับหน้าเว็บ"""
+    seg = lambda: "".join(random.choice(string.ascii_uppercase + string.digits) for _ in range(4))
+    return f"CKX-{seg()}-{seg()}-{seg()}"
+
+# 🟢 Preset แพ็กเกจราคาตามหน้าเว็บ (tier, จำนวนจอ, จำนวนวัน)
+KEY_PACKAGES = {
+    "Basic 1 วัน (฿20) — 1 จอ": {"tier": "normal", "sessions": 1, "days": 1},
+    "Pro 1 วัน (฿25) — 1 จอ": {"tier": "premier", "sessions": 1, "days": 1},
+    "Pro 7 วัน (฿175) — 1 จอ": {"tier": "premier", "sessions": 1, "days": 7},
+    "Pro 15 วัน (฿375) — 1 จอ": {"tier": "premier", "sessions": 1, "days": 15},
+    "Pro 30 วัน (฿750) — 1 จอ": {"tier": "premier", "sessions": 1, "days": 30},
+    "Max 30 วัน (฿450) — ไม่จำกัดจอ": {"tier": "premier", "sessions": 999, "days": 30},
+    "กำหนดเอง (Custom)": None,
+}
+
 def log_admin_action(action, detail=""):
     try:
         db_execute(
@@ -464,18 +448,62 @@ def log_admin_action(action, detail=""):
     except Exception as ex:
         print(f"[audit_log] insert failed: {ex}")
 
+# 🟢 [FIX] สร้างตาราง admin_audit_log อัตโนมัติถ้ายังไม่มี
+# (เดิมตารางไม่เคยถูกสร้างใน DB ทำให้ audit log บันทึกพลาดเงียบ ๆ มาตลอด)
+def ensure_audit_table():
+    try:
+        db_execute("""
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id SERIAL PRIMARY KEY,
+                action TEXT NOT NULL,
+                detail TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
+    except Exception as ex:
+        print(f"[audit_log] ensure table failed: {ex}")
+
+ensure_audit_table()
+
 # ==========================================
 # 🟢 Relay Worker: ยิงภาพ/ข้อความแจ้งเตือนเข้า Discord
+# 🟢 [FIX] ใช้ connection ของ thread ตัวเอง (thread-local) + commit ทุกลูป
+#     เดิมไปแชร์ conn ของ UI ผ่าน db_query ซึ่งไม่ thread-safe และไม่ commit
+#     ทำให้ UPDATE ค้างใน transaction → แจ้งเตือนซ้ำเมื่อ connection หลุด
 # ==========================================
+_worker_local = threading.local()
+
+def _get_worker_conn():
+    """connection แยกของ relay worker thread (ปลอดภัยต่อการใช้ข้าม psycopg2 thread)"""
+    conn = getattr(_worker_local, "conn", None)
+    try:
+        if conn is not None and conn.closed == 0:
+            with conn.cursor() as _c:
+                _c.execute("SELECT 1;")
+            return conn
+    except Exception:
+        pass
+    conn = psycopg2.connect(
+        host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
+        user=DB_USER, password=DB_PASS, connect_timeout=5
+    )
+    conn.autocommit = True
+    _worker_local.conn = conn
+    return conn
+
 def discord_relay_worker():
     while True:
         try:
-            rows = db_query("""
-                UPDATE user_monitors
-                SET pending_alert_msg = NULL, pending_alert_img = NULL
-                WHERE pending_alert_msg IS NOT NULL AND pending_alert_msg != ''
-                RETURNING id, license_key, hwid, pending_alert_msg, pending_alert_img;
-            """)
+            conn = _get_worker_conn()
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    UPDATE user_monitors
+                    SET pending_alert_msg = NULL, pending_alert_img = NULL
+                    WHERE pending_alert_msg IS NOT NULL AND pending_alert_msg != ''
+                    RETURNING id, license_key, hwid, pending_alert_msg, pending_alert_img;
+                """)
+                rows = cur.fetchall()
+            # autocommit = True → ไม่ต้อง commit เอง แถวถูกล้างทันทีแบบถาวร
             if rows:
                 for row in rows:
                     msg = row.get("pending_alert_msg")
@@ -517,7 +545,7 @@ start_relay_worker_once()
 # ==========================================
 # 🔒 ระบบยืนยันตัวตนแอดมิน
 # ==========================================
-ADMIN_PIN = st.secrets.get("ADMIN_PIN", "1234")
+ADMIN_PIN = _get_secret("ADMIN_PIN", "1234")
 MAX_PIN_ATTEMPTS = 5
 LOCKOUT_SECONDS = 300
 ATTEMPT_WINDOW_SECONDS = 600
@@ -562,9 +590,25 @@ def _is_locked_out():
 if not st.session_state.authenticated:
     inject_theme()
     st.markdown('<div class="cx-login-wrap">', unsafe_allow_html=True)
-    st.markdown('<div class="cx-brand-logo" style="margin:0 auto 14px auto;">⚡</div>', unsafe_allow_html=True)
-    st.title("🔒 Cookie X Admin")
+    st.markdown('<div class="cx-login-logo">⚡</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-family:\'Oswald\',sans-serif;font-size:26px;font-weight:600;'
+        'letter-spacing:0.16em;color:#fff;">COOKIE X ADMIN</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="font-family:\'JetBrains Mono\',monospace;font-size:10px;'
+        'letter-spacing:0.28em;color:var(--cx-faint);margin-bottom:18px;">RESTRICTED ACCESS // PIN REQUIRED</div>',
+        unsafe_allow_html=True,
+    )
     st.caption("ระบบจัดการบอท Cookie X (กรุณากรอก PIN เพื่อเข้าใช้งาน)")
+
+    if ADMIN_PIN == "1234":
+        st.markdown(
+            '<div class="cx-warn-banner">⚠️ คุณกำลังใช้ PIN default (<b>1234</b>) — '
+            'กรุณาตั้งค่า <b>ADMIN_PIN</b> ในไฟล์ secrets เพื่อความปลอดภัย</div>',
+            unsafe_allow_html=True,
+        )
 
     locked, remaining_sec = _is_locked_out()
 
@@ -579,11 +623,14 @@ if not st.session_state.authenticated:
         if st.session_state.pin_fail_count > 0:
             st.warning(f"⚠️ รหัสไม่ถูกต้อง — เหลือโอกาสอีก {remaining_tries} ครั้ง")
 
-        if st.button("เข้าสู่ระบบ", type="primary"):
+        if st.button("🔓 เข้าสู่ระบบ", type="primary", use_container_width=True):
             if pin_input == ADMIN_PIN:
                 _reset_pin_attempts()
                 st.session_state.authenticated = True
-                st.success("เข้าสู่ระบบสำเร็จ!")
+                try:
+                    st.toast("เข้าสู่ระบบสำเร็จ!", icon="✅")
+                except Exception:
+                    pass
                 log_admin_action("login_success")
                 st.rerun()
             else:
@@ -607,6 +654,7 @@ menu = st.sidebar.radio(
         "💻 Active Sessions (เซสชันจอสด)",
         "🚀 ปล่อยอัปเดต (App Versions)",
         "💰 บันทึกรายรับ-รายจ่าย & สลิป (Accounting)",
+        "📜 Audit Log (ประวัติแอดมิน)",
     ],
     label_visibility="collapsed",
 )
@@ -630,7 +678,8 @@ if menu == "🏠 ภาพรวม (Overview)":
     with ov_col1:
         st.markdown("#### 🤖 สถานะบอท")
         try:
-            bots = db_query_cached("SELECT status, current_step FROM user_monitors;")
+            # 🟢 [FIX] ดึงคอลัมน์เพิ่มเพื่อให้ Watchdog ทำงานได้จากทุกหน้า (ไม่ต้องเปิด Live Monitor เฉย ๆ)
+            bots = db_query_cached("SELECT license_key, status, current_step, boxes_collected, pc_specs, last_seen FROM user_monitors;")
             total_bots = len(bots)
             running = len([b for b in bots if str(b.get("status", "")).upper() == "RUNNING"])
             crashed = len([b for b in bots if "CRASH" in str(b.get("status", "")).upper()])
@@ -640,12 +689,19 @@ if menu == "🏠 ภาพรวม (Overview)":
             bc1.metric("ทั้งหมด", f"{total_bots}")
             bc2.metric("🟢 รันอยู่", f"{running}")
             bc3.metric("🚨 มีปัญหา", f"{crashed + captcha}")
+
+            # 🟢 Watchdog: ตรวจบอทล่ม/CAPTCHA/หลุดการเชื่อมต่อ แล้วแจ้ง Discord (ทุกหน้าที่เปิด Overview)
+            check_and_alert_bot_health(bots)
         except Exception as e:
             st.error(f"โหลดข้อมูลบอทไม่สำเร็จ: {e}")
 
         st.markdown("#### 💻 เซสชันที่เปิดอยู่")
         try:
-            sess_ov = db_query_cached("SELECT session_id FROM active_sessions;")
+            # 🟢 [FIX] กรองเฉพาะเซสชันที่ส่ง Heartbeat ภายใน 60 วินาที (เดิมนับรวมแถวค้างเก่า ตัวเลขฟอก)
+            sess_ov = db_query_cached(
+                "SELECT session_id FROM active_sessions "
+                "WHERE last_heartbeat >= NOW() - INTERVAL '60 seconds' OR last_heartbeat IS NULL;"
+            )
             st.metric("จอที่เปิดใช้งานตอนนี้", f"{len(sess_ov)} จอ")
         except Exception as e:
             st.error(f"โหลดข้อมูลเซสชันไม่สำเร็จ: {e}")
@@ -701,11 +757,106 @@ if menu == "🏠 ภาพรวม (Overview)":
         except Exception as e:
             st.error(f"โหลดข้อมูลบัญชีไม่สำเร็จ: {e}")
 
+    # 🟢 กราฟสรุปใน Overview (รายได้รายเดือน / Top กล่อง / คีย์ใหม่รายเดือน)
+    st.divider()
+    ch_col1, ch_col2 = st.columns(2)
+
+    with ch_col1:
+        st.markdown("#### 💰 รายรับ-รายจ่าย 6 เดือนล่าสุด")
+        try:
+            acc_ch = db_query_cached(
+                "SELECT type, amount, created_at FROM accounting_records WHERE status = 'completed';"
+            )
+            if acc_ch:
+                df_ch = pd.DataFrame(acc_ch)
+                df_ch["created_at"] = pd.to_datetime(df_ch["created_at"], errors="coerce")
+                df_ch = df_ch.dropna(subset=["created_at"])
+                # 🟢 [FIX] แปลง Decimal → float ก่อนเข้ากราฟ ไม่งั้น Streamlit serialize
+                # ข้อมูลพัง แสดงยอดโตขึ้น 100 เท่า (331 → 33,100)
+                df_ch["amount"] = pd.to_numeric(df_ch["amount"], errors="coerce")
+                pivot_ch = df_ch.pivot_table(
+                    index=df_ch["created_at"].dt.strftime("%Y-%m"),
+                    columns="type", values="amount", aggfunc="sum", fill_value=0,
+                )
+                for _c in ("income", "expense"):
+                    if _c not in pivot_ch.columns:
+                        pivot_ch[_c] = 0
+                pivot_ch = pivot_ch.rename(columns={"income": "รายรับ", "expense": "รายจ่าย"}).sort_index().tail(6)
+                # 🟢 ใช้ Altair เพื่อ format ตัวเลขใน tooltip เป็น 33,100.00 (st.bar_chart แสดงเลขดิบ)
+                month_col = pivot_ch.index.name or "index"
+                chart_melt = pivot_ch.reset_index().melt(
+                    id_vars=[month_col], var_name="ประเภท", value_name="จำนวนเงิน",
+                ).rename(columns={month_col: "เดือน"})
+                _fin_chart = alt.Chart(chart_melt).mark_bar().encode(
+                    x=alt.X("เดือน:N", sort=list(pivot_ch.index), title="เดือน"),
+                    y=alt.Y("จำนวนเงิน:Q", title="บาท"),
+                    color=alt.Color("ประเภท:N", legend=alt.Legend(title=None),
+                                    scale=alt.Scale(domain=["รายรับ", "รายจ่าย"],
+                                                    range=["#3ddc84", "#ff4655"])),
+                    tooltip=[
+                        alt.Tooltip("เดือน:N", title="เดือน"),
+                        alt.Tooltip("ประเภท:N", title="ประเภท"),
+                        alt.Tooltip("จำนวนเงิน:Q", title="ยอดเงิน (บาท)", format=",.2f"),
+                    ],
+                ).properties(height=300)
+                st.altair_chart(_fin_chart, use_container_width=True)
+            else:
+                st.info("ยังไม่มีข้อมูลบัญชี")
+        except Exception as e:
+            st.caption(f"โหลดกราฟบัญชีไม่สำเร็จ: {e}")
+
+    with ch_col2:
+        st.markdown("#### 📦 Top 10 บอทเก็บกล่องเยอะสุด")
+        try:
+            if bots:
+                df_bots_ch = pd.DataFrame(bots)
+                if "boxes_collected" in df_bots_ch.columns and df_bots_ch["boxes_collected"].sum() > 0:
+                    top_boxes = df_bots_ch.nlargest(10, "boxes_collected")
+                    top_series = top_boxes.set_index(
+                        top_boxes["license_key"].astype(str).str.slice(0, 12) + "…"
+                    )["boxes_collected"]
+                    st.bar_chart(top_series, color="#f5c14e", use_container_width=True)
+                else:
+                    st.caption("ยังไม่มีสถิติกล่องสะสม")
+            else:
+                st.caption("ยังไม่มีข้อมูลบอท")
+        except Exception as e:
+            st.caption(f"โหลดกราฟบอทไม่สำเร็จ: {e}")
+
+    st.markdown("#### 🔑 คีย์ที่สร้างรายเดือน")
+    try:
+        keys_ch = db_query_cached("SELECT created_at FROM licenses;")
+        df_kch = pd.DataFrame(keys_ch)
+        if "created_at" in df_kch.columns and not df_kch.empty:
+            df_kch["created_at"] = pd.to_datetime(df_kch["created_at"], errors="coerce")
+            df_kch = df_kch.dropna(subset=["created_at"])
+            if not df_kch.empty:
+                km_series = df_kch.groupby(df_kch["created_at"].dt.strftime("%Y-%m")).size().sort_index().tail(6)
+                st.bar_chart(km_series, color="#22d3ee", use_container_width=True)
+            else:
+                st.caption("ตาราง licenses ไม่มีข้อมูลวันที่สร้าง — ข้ามกราฟนี้")
+        else:
+            st.caption("ตาราง licenses ไม่มีคอลัมน์ created_at — ข้ามกราฟนี้")
+    except Exception:
+        st.caption("ตาราง licenses ไม่มีคอลัมน์ created_at — ข้ามกราฟนี้")
+
 # ---------------------------------------------------------
 # 📊 TAB: LIVE MONITOR
 # ---------------------------------------------------------
 elif menu == "📊 Live Monitor (มอนิเตอร์บอท)":
     page_header("📊 Live Bot Monitor", "มอนิเตอร์สถานะลูกค้าเรียลไทม์และสเปคฮาร์ดแวร์เครื่องลูกค้า")
+
+    # 🟢 Auto-refresh: สวิตช์เลือกรอบรีเฟรชอัตโนมัติ
+    ref_c1, ref_c2 = st.columns([1, 2])
+    with ref_c1:
+        auto_on = st.toggle("🔄 รีเฟรชอัตโนมัติ", value=False, key="live_auto_toggle",
+                            disabled=not HAS_AUTOREFRESH,
+                            help="" if HAS_AUTOREFRESH else "ต้องติดตั้งก่อน: pip install streamlit-autorefresh")
+    with ref_c2:
+        interval_sec = st.select_slider("รอบรีเฟรช (วินาที):", options=[15, 30, 60], value=30,
+                                        key="live_auto_interval", disabled=not (auto_on and HAS_AUTOREFRESH))
+    if auto_on and HAS_AUTOREFRESH:
+        st_autorefresh(interval=interval_sec * 1000, key="live_monitor_autorefresh")
 
     if st.button("🔄 รีเฟรชข้อมูลสด"):
         st.rerun()
@@ -742,7 +893,20 @@ elif menu == "📊 Live Monitor (มอนิเตอร์บอท)":
                         mask = mask | df_show[col].fillna("").astype(str).str.contains(search_bot.strip(), case=False)
                 df_show = df_show[mask]
 
-            show_cols = ["license_key", "status", "current_step", "farm_mode", "boxes_collected", "lives_collected", "cpu_usage", "ram_usage", "pc_specs", "bot_version", "last_seen"]
+            # 🟢 คอลัมน์สถานะสี (อ่านเร็วกว่าข้อความดิบ)
+            def _bot_badge(row):
+                st_raw = str(row.get("status", "")).upper()
+                step_raw = str(row.get("current_step", ""))
+                if "CRASH" in st_raw:
+                    return "🔴 Crash"
+                if "CAPTCHA" in step_raw.upper() or "ติด" in step_raw:
+                    return "🟡 CAPTCHA"
+                if st_raw == "RUNNING":
+                    return "🟢 รันอยู่"
+                return "⚪ Idle"
+            df_show["สถานะ"] = df_show.apply(_bot_badge, axis=1)
+
+            show_cols = ["license_key", "สถานะ", "status", "current_step", "farm_mode", "boxes_collected", "lives_collected", "cpu_usage", "ram_usage", "pc_specs", "bot_version", "last_seen"]
             existing_cols = [c for c in show_cols if c in df_show.columns]
             st.dataframe(df_show[existing_cols], use_container_width=True, hide_index=True)
         else:
@@ -830,10 +994,11 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
         m3.metric("💻 โควตาจอรันจริง", f"{total_screens:,} จอ")
         m4.metric("⏳ หมดอายุแล้ว", f"{expired_grace_count:,} คีย์")
 
-        tab_table, tab_grace, tab_add, tab_manage = st.tabs([
+        tab_table, tab_grace, tab_add, tab_bulk, tab_manage = st.tabs([
             f"📋 รายการคีย์ทั้งหมด ({len(df_keys)})",
             f"⏳ คีย์หมดอายุ ({expired_grace_count})",
             "➕ สร้างคีย์ใหม่ (Add Key)",
+            "📦 สร้างคีย์เป็นชุด (Bulk)",
             "⚙️ แก้ไข / จัดการคีย์ (Manage)",
         ])
 
@@ -993,6 +1158,100 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
                         st.rerun()
                     except Exception as err:
                         st.error(f"สร้างคีย์ไม่สำเร็จ: {err}")
+
+        with tab_bulk:
+            st.markdown("##### 📦 สร้างคีย์เป็นชุดตามแพ็กเกจเว็บ")
+            st.caption("เลือกแพ็กเกจ → ระบุจำนวนคีย์ → ระบบสุ่มคีย์รูปแบบ CKX-XXXX-XXXX-XXXX บันทึกทีเดียว พร้อม Export CSV ส่งลูกค้า")
+
+            bulk_col1, bulk_col2 = st.columns(2)
+            with bulk_col1:
+                pkg_pick = st.selectbox("📦 แพ็กเกจ:", list(KEY_PACKAGES.keys()), key="bulk_pkg")
+                bulk_count = st.number_input("🔢 จำนวนคีย์ที่จะสร้าง:", min_value=1, max_value=100, value=5, step=1, key="bulk_count")
+                bulk_note = st.text_input("📝 บันทึกลูกค้า (Note):", placeholder="เช่น ลูกค้า Line: บอสเบียร์", key="bulk_note")
+            with bulk_col2:
+                pkg_cfg = KEY_PACKAGES[pkg_pick]
+                if pkg_cfg is None:
+                    bulk_days = st.number_input("⏳ ระยะเวลา (วัน):", min_value=1, value=30, step=1, key="bulk_days")
+                    bulk_sessions = st.number_input("💻 จำนวนจอ:", min_value=1, value=1, step=1, key="bulk_sess")
+                    bulk_tier = st.selectbox("⭐ ระดับสิทธิ์:", ["normal", "premier"], key="bulk_tier")
+                else:
+                    bulk_days = pkg_cfg["days"]
+                    bulk_sessions = pkg_cfg["sessions"]
+                    bulk_tier = pkg_cfg["tier"]
+                    st.info(
+                        f"**ระดับ:** {bulk_tier.upper()} · **จำนวนจอ:** {bulk_sessions:,} จอ · **อายุ:** {bulk_days} วัน\n\n"
+                        f"**หมดอายุ:** {(now_thai_val + timedelta(days=bulk_days)).strftime('%Y-%m-%d %H:%M')}"
+                    )
+                bulk_send_dc = st.checkbox("🔔 ส่งสรุปการสร้างเข้า Discord", value=True, key="bulk_dc")
+
+            if st.button(f"✨ สร้าง {int(bulk_count)} คีย์ ({pkg_pick.split(' — ')[0]})", type="primary", use_container_width=True):
+                try:
+                    expire_str = (now_thai_val + timedelta(days=int(bulk_days))).strftime("%Y-%m-%d %H:%M:%S")
+                    new_keys = []
+                    params_list = []
+                    for _ in range(int(bulk_count)):
+                        k = generate_ckx_key()
+                        new_keys.append({"license_key": k, "tier": bulk_tier, "sessions": bulk_sessions, "expire": expire_str})
+                        params_list.append((k, int(bulk_sessions), bulk_tier, bulk_note.strip(), expire_str))
+
+                    conn_bulk = _get_live_conn()
+                    with conn_bulk.cursor() as cur_bulk:
+                        cur_bulk.executemany(
+                            "INSERT INTO licenses (license_key, max_sessions, key_type, note, expire_date, is_active) VALUES (%s, %s, %s, %s, %s, TRUE);",
+                            params_list,
+                        )
+                    conn_bulk.commit()
+                    try:
+                        db_query_cached.clear()
+                    except Exception:
+                        pass
+
+                    st.session_state.bulk_generated = new_keys
+                    st.session_state.bulk_meta = {"package": pkg_pick.split(" — ")[0], "days": int(bulk_days), "note": bulk_note.strip()}
+                    log_admin_action("bulk_create_keys", f"{len(new_keys)} keys | {pkg_pick.split(' — ')[0]}")
+
+                    if bulk_send_dc and ADMIN_DISCORD_WEBHOOK:
+                        try:
+                            requests.post(ADMIN_DISCORD_WEBHOOK, json={
+                                "embeds": [{
+                                    "title": f"📦 สร้างคีย์เป็นชุด {len(new_keys)} คีย์",
+                                    "color": 5763719,
+                                    "fields": [
+                                        {"name": "📦 แพ็กเกจ", "value": pkg_pick, "inline": True},
+                                        {"name": "⭐ ระดับ", "value": f"`{str(bulk_tier).upper()}`", "inline": True},
+                                        {"name": "💻 จำนวนจอ/คีย์", "value": f"{bulk_sessions:,} จอ", "inline": True},
+                                        {"name": "⏰ หมดอายุ", "value": f"**{expire_str[:16]}**", "inline": False},
+                                        {"name": "📝 บันทึก", "value": bulk_note.strip() or "-", "inline": False},
+                                    ],
+                                    "footer": {"text": f"Bulk Key Generator • {now_thai().strftime('%Y-%m-%d %H:%M:%S')}"},
+                                }]
+                            }, timeout=8)
+                        except Exception as ex:
+                            print(f"[bulk] discord post failed: {ex}")
+
+                    st.success(f"✅ สร้าง {len(new_keys)} คีย์สำเร็จ! (หมดอายุ {expire_str[:16]})")
+                    st.rerun()
+                except Exception as err:
+                    st.error(f"สร้างคีย์เป็นชุดไม่สำร็จ: {err}")
+
+            # ตารางผลลัพธ์ครั้งล่าสุด + Export CSV
+            if st.session_state.get("bulk_generated"):
+                st.divider()
+                st.markdown(f"##### 📄 คีย์ที่สร้างล่าสุด ({len(st.session_state.bulk_generated)} คีย์)")
+                df_bulk = pd.DataFrame(st.session_state.bulk_generated)
+                df_bulk_disp = df_bulk.rename(columns={
+                    "license_key": "License Key", "tier": "ระดับ", "sessions": "จอ", "expire": "หมดอายุ",
+                })
+                st.dataframe(df_bulk_disp, use_container_width=True, hide_index=True)
+
+                st.download_button(
+                    label="📥 Export คีย์เป็น CSV (ส่งลูกค้า)",
+                    data=df_bulk.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"keys_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    type="primary",
+                    use_container_width=True,
+                )
 
         with tab_manage:
             if not df_keys.empty:
@@ -1336,6 +1595,72 @@ elif menu == "🚀 ปล่อยอัปเดต (App Versions)":
             st.error(f"โหลดประวัติเวอร์ชันไม่สำเร็จ: {e}")
 
 # ---------------------------------------------------------
+# 📜 TAB: AUDIT LOG — ประวัติการทำงานของแอดมิน
+# ---------------------------------------------------------
+elif menu == "📜 Audit Log (ประวัติแอดมิน)":
+    page_header("📜 Admin Audit Log", "ประวัติการทำงานทั้งหมดของแอดมิน (ล็อกอิน / สร้าง-แก้ไข-ลบคีย์ / บัญชี) ล่าสุด 500 รายการ")
+
+    try:
+        logs = db_query_cached("SELECT * FROM admin_audit_log ORDER BY id DESC LIMIT 500;")
+        if logs:
+            df_log = pd.DataFrame(logs)
+            if "created_at" in df_log.columns:
+                df_log["created_at"] = pd.to_datetime(df_log["created_at"], errors="coerce")
+
+            lg_c1, lg_c2, lg_c3 = st.columns([2, 1.5, 1.5])
+            with lg_c1:
+                log_search = st.text_input("🔍 ค้นหา (action / รายละเอียด):", placeholder="พิมพ์ค้นหา...", key="log_search")
+            with lg_c2:
+                all_actions = ["ทั้งหมด"] + sorted(df_log["action"].dropna().unique().tolist())
+                log_action_filter = st.selectbox("📌 ประเภท action:", all_actions, key="log_action_filter")
+            with lg_c3:
+                log_range = st.date_input(
+                    "📅 ช่วงวันที่:",
+                    value=(datetime.now().date() - timedelta(days=7), datetime.now().date()),
+                    key="log_range",
+                )
+
+            df_log_show = df_log.copy()
+            if log_search.strip():
+                mm = pd.Series(False, index=df_log_show.index)
+                for col in ["action", "detail"]:
+                    if col in df_log_show.columns:
+                        mm = mm | df_log_show[col].fillna("").astype(str).str.contains(log_search.strip(), case=False)
+                df_log_show = df_log_show[mm]
+            if log_action_filter != "ทั้งหมด":
+                df_log_show = df_log_show[df_log_show["action"] == log_action_filter]
+            if isinstance(log_range, (list, tuple)) and len(log_range) == 2:
+                d_from, d_to = log_range
+                df_log_show = df_log_show[
+                    (df_log_show["created_at"].dt.date >= d_from) & (df_log_show["created_at"].dt.date <= d_to)
+                ]
+
+            # สรุปวันนี้
+            today_logs = df_log[df_log["created_at"].dt.date == datetime.now().date()] if "created_at" in df_log.columns else pd.DataFrame()
+            lg1, lg2, lg3, lg4 = st.columns(4)
+            lg1.metric("รายการทั้งหมด (ล่าสุด 500)", f"{len(df_log)}")
+            lg2.metric("จำนวนที่กรองได้", f"{len(df_log_show)}")
+            lg3.metric("action วันนี้", f"{len(today_logs)}")
+            lg4.metric("login วันนี้", f"{len(today_logs[today_logs['action'] == 'login_success']) if not today_logs.empty else 0}")
+
+            df_log_disp = df_log_show.copy()
+            if "created_at" in df_log_disp.columns:
+                df_log_disp["เวลา (ไทย)"] = df_log_disp["created_at"].dt.strftime("%Y-%m-%d %H:%M:%S")
+            show_log_cols = [c for c in ["id", "เวลา (ไทย)", "action", "detail"] if c in df_log_disp.columns]
+            st.dataframe(df_log_disp[show_log_cols], use_container_width=True, hide_index=True)
+
+            st.download_button(
+                label="📥 Export Audit Log (CSV)",
+                data=df_log_show.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"audit_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+            )
+        else:
+            st.info("ยังไม่มีประวัติการทำงานในระบบ")
+    except Exception as e:
+        st.error(f"โหลด Audit Log ไม่สำเร็จ: {e}")
+
+# ---------------------------------------------------------
 # 💰 TAB: บันทึกรายรับ-รายจ่าย & สลิป (Accounting)
 # ---------------------------------------------------------
 elif menu == "💰 บันทึกรายรับ-รายจ่าย & สลิป (Accounting)":
@@ -1581,6 +1906,8 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
         if not df_completed.empty:
             st.write("#### 📈 กราฟแนวโน้มรายรับ - รายจ่าย (เฉพาะรายการที่อนุมัติแล้ว)")
             chart_df = df_completed.copy()
+            # 🟢 [FIX] แปลง Decimal → float ก่อนเข้ากราฟ (กันยอดโต 100 เท่า)
+            chart_df["amount"] = pd.to_numeric(chart_df["amount"], errors="coerce")
             chart_df["date_str"] = chart_df["created_at"].dt.strftime("%Y-%m-%d")
             pivot_chart = chart_df.pivot_table(index="date_str", columns="type", values="amount", aggfunc="sum", fill_value=0)
             if "income" not in pivot_chart.columns:
@@ -1589,7 +1916,24 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
                 pivot_chart["expense"] = 0
             pivot_chart = pivot_chart.rename(columns={"income": "รายรับ (Income)", "expense": "รายจ่าย (Expense)"})
             pivot_chart = pivot_chart.sort_index(ascending=True)  # เรียงจากวันแรกไปวันล่าสุด
-            st.bar_chart(pivot_chart, color=["#22c55e", "#ef4444"], use_container_width=True)
+            # 🟢 ใช้ Altair เพื่อ format ตัวเลขใน tooltip เป็น 33,100.00 (st.bar_chart แสดงเลขดิบ)
+            date_col = pivot_chart.index.name or "index"
+            chart_melt2 = pivot_chart.reset_index().melt(
+                id_vars=[date_col], var_name="ประเภท", value_name="จำนวนเงิน",
+            ).rename(columns={date_col: "วันที่"})
+            _fin_chart2 = alt.Chart(chart_melt2).mark_bar().encode(
+                x=alt.X("วันที่:N", sort=list(pivot_chart.index), title="วันที่"),
+                y=alt.Y("จำนวนเงิน:Q", title="บาท"),
+                color=alt.Color("ประเภท:N", legend=alt.Legend(title=None),
+                                scale=alt.Scale(domain=["รายรับ (Income)", "รายจ่าย (Expense)"],
+                                                range=["#3ddc84", "#ff4655"])),
+                tooltip=[
+                    alt.Tooltip("วันที่:N", title="วันที่"),
+                    alt.Tooltip("ประเภท:N", title="ประเภท"),
+                    alt.Tooltip("จำนวนเงิน:Q", title="ยอดเงิน (บาท)", format=",.2f"),
+                ],
+            ).properties(height=300)
+            st.altair_chart(_fin_chart2, use_container_width=True)
 
         df_display = df_filtered.copy()
         df_display["ประเภท"] = df_display["type"].map({"income": "🟢 รายรับ", "expense": "🔴 รายจ่าย"})
@@ -1609,7 +1953,7 @@ elif menu == "💰 บันทึกรายรับ-รายจ่าย & 
             label="📥 ดาวน์โหลดประวัติบัญชี (Export to CSV)",
             data=csv_data,
             file_name=f"accounting_report_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/css",
+            mime="text/csv",
         )
 
         st.divider()
