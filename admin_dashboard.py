@@ -119,82 +119,86 @@ def page_header(title, subtitle=""):
 inject_theme()
 
 # ==========================================
-# 🟢 เชื่อมต่อ PostgreSQL Database (Google Cloud VM)
+# 🟢 เชื่อมต่อ PostgreSQL Database (Auto-Reconnect & Keepalive)
 # ==========================================
-def _get_secret(key, default=""):
-    """🟢 [FIX] อ่านค่าจาก st.secrets อย่างปลอดภัย — เดิม st.secrets.get() โยน
-    StreamlitSecretNotFoundError ทั้งแอปถ้าไม่มีไฟล์ secrets.toml แม้จะใส่ default ไว้"""
-    try:
-        val = st.secrets.get(key, default)
-        return default if val is None else val
-    except Exception:
-        return default
-
-DB_HOST = _get_secret("DB_HOST", "34.87.134.194")
-DB_PORT = int(_get_secret("DB_PORT", 5432))
-DB_NAME = _get_secret("DB_NAME", "cookiebot_db")
-DB_USER = _get_secret("DB_USER", "postgres")
-DB_PASS = _get_secret("DB_PASS", "Password123")
-
-@st.cache_resource
-def get_db_connection():
-    """เปิด connection ใหม่แบบ autocommit และกำหนด timeout ป้องกันการค้าง"""
+def _create_db_connection():
+    """สร้าง connection ใหม่ พร้อมตั้งค่า TCP Keepalive ป้องกัน GCP VM ตัดการเชื่อมต่อเมื่อ idle"""
     conn = psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,
         dbname=DB_NAME,
         user=DB_USER,
         password=DB_PASS,
-        connect_timeout=5
+        connect_timeout=5,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5
     )
     conn.autocommit = True
     return conn
-
-
+_global_conn = None
 def _get_live_conn():
-    """คืน connection ที่ใช้งานได้จริง ถ้าขาดไปแล้วจะสร้างใหม่ให้อัตโนมัติ"""
+    """เช็คและคืน connection ที่ใช้งานได้จริง ถ้าหลุดหรือ closed ไปแล้วจะสร้างใหม่ให้อัตโนมัติ"""
+    global _global_conn
     try:
-        conn = get_db_connection()
-        if getattr(conn, "closed", 1) != 0:
-            raise psycopg2.InterfaceError("connection closed")
-        # ตรวจว่ายังคุยกับ DB ได้จริง
-        with conn.cursor() as _c:
-            _c.execute("SELECT 1;")
-        return conn
+        if _global_conn is not None and getattr(_global_conn, "closed", 1) == 0:
+            with _global_conn.cursor() as c:
+                c.execute("SELECT 1;")
+            return _global_conn
     except Exception:
-        # connection ตาย -> ล้าง cache แล้วต่อใหม่
-        try:
-            get_db_connection.clear()
-        except Exception:
-            pass
-        return get_db_connection()
-
-
+        pass
+    try:
+        if _global_conn is not None:
+            _global_conn.close()
+    except Exception:
+        pass
+    _global_conn = _create_db_connection()
+    return _global_conn
+def get_db_connection():
+    return _get_live_conn()
 @st.cache_data(ttl=15, show_spinner=False)
 def db_query_cached(sql, params=None):
-    """🟢 [SPEED] query ที่ cache ผลไว้ 15 วินาที ดึงเสร็จปิด connection ทันที"""
-    with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, params or ())
-            return [dict(r) for r in cur.fetchall()]
-
-
+    """query ที่ cache ผลไว้ 15 วินาที พร้อม retry ต่อใหม่อัตโนมัติถ้าเน็ตหลุด"""
+    for attempt in range(2):
+        try:
+            conn = _get_live_conn()
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(sql, params or ())
+                return [dict(r) for r in cur.fetchall()]
+        except (psycopg2.InterfaceError, psycopg2.OperationalError):
+            global _global_conn
+            _global_conn = None
+            if attempt == 1:
+                raise
 def db_query(sql, params=None, fetch=True):
-    """query สดใหม่ ทำงานจบแล้วปิด connection คืนระบบทันที ไม่แช่ค้าง"""
-    with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(sql, params or ())
-            if fetch:
-                return cur.fetchall()
-            return []
-
-
+    """query สดใหม่ พร้อมระบบ auto-reconnect อัตโนมัติ"""
+    for attempt in range(2):
+        try:
+            conn = _get_live_conn()
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(sql, params or ())
+                if fetch:
+                    return cur.fetchall()
+                return []
+        except (psycopg2.InterfaceError, psycopg2.OperationalError):
+            global _global_conn
+            _global_conn = None
+            if attempt == 1:
+                raise
 def db_execute(sql, params=None):
-    """รันคำสั่ง INSERT/UPDATE/DELETE เสร็จแล้วปิดคืน connection ทันที"""
-    with get_db_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, params or ())
-    # ล้าง cache ทันทีเมื่อมีการเขียนข้อมูลใหม่
+    """รันคำสั่ง INSERT/UPDATE/DELETE พร้อมระบบ auto-reconnect"""
+    for attempt in range(2):
+        try:
+            conn = _get_live_conn()
+            with conn.cursor() as cur:
+                cur.execute(sql, params or ())
+            break
+        except (psycopg2.InterfaceError, psycopg2.OperationalError):
+            global _global_conn
+            _global_conn = None
+            if attempt == 1:
+                raise
     try:
         db_query_cached.clear()
     except Exception:
