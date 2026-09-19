@@ -172,41 +172,33 @@ def _get_live_conn():
 
 @st.cache_data(ttl=15, show_spinner=False)
 def db_query_cached(sql, params=None):
-    """🟢 ดึงข้อมูลเสร็จแล้วปิด connection ทันที ป้องกัน connection ค้างและหลุด"""
-    conn = get_db_connection()
-    try:
+    """🟢 [SPEED] query ที่ cache ผลไว้ 15 วินาที ดึงเสร็จปิด connection ทันที"""
+    with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, params or ())
             return [dict(r) for r in cur.fetchall()]
-    finally:
-        conn.close()
 
 
 def db_query(sql, params=None, fetch=True):
-    """query สดใหม่ ทำงานจบแล้วปิด connection ทันที"""
-    conn = get_db_connection()
-    try:
+    """query สดใหม่ ทำงานจบแล้วปิด connection คืนระบบทันที ไม่แช่ค้าง"""
+    with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(sql, params or ())
             if fetch:
                 return cur.fetchall()
             return []
-    finally:
-        conn.close()
 
 
 def db_execute(sql, params=None):
     """รันคำสั่ง INSERT/UPDATE/DELETE เสร็จแล้วปิดคืน connection ทันที"""
-    conn = get_db_connection()
-    try:
+    with get_db_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params or ())
-    finally:
-        conn.close()
-        try:
-            db_query_cached.clear()
-        except Exception:
-            pass
+    # ล้าง cache ทันทีเมื่อมีการเขียนข้อมูลใหม่
+    try:
+        db_query_cached.clear()
+    except Exception:
+        pass
 
 ADMIN_DISCORD_WEBHOOK = _get_secret("ADMIN_DISCORD_WEBHOOK", "")
 GDRIVE_FOLDER_ID = _get_secret("GDRIVE_FOLDER_ID", "")
@@ -669,7 +661,6 @@ if menu == "🏠 ภาพรวม (Overview)":
 
     with ov_col1:
         st.markdown("#### 🤖 สถานะบอท")
-        bots = [] # [FIX] เพิ่มการดึงข้อมูลบอท
         try:
             # 🟢 [FIX] ดึงคอลัมน์เพิ่มเพื่อให้ Watchdog ทำงานได้จากทุกหน้า (ไม่ต้องเปิด Live Monitor เฉย ๆ)
             bots = db_query_cached("SELECT license_key, status, current_step, boxes_collected, pc_specs, last_seen FROM user_monitors;")
