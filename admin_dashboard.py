@@ -132,9 +132,9 @@ def _get_secret(key, default=""):
 
 DB_HOST = _get_secret("DB_HOST", "34.87.134.194")
 DB_PORT = int(_get_secret("DB_PORT", 5432))
-DB_NAME = _get_secret("DB_NAME", "cookiebot-db-new")
+DB_NAME = _get_secret("DB_NAME", "cookiebot_db")
 DB_USER = _get_secret("DB_USER", "postgres")
-DB_PASS = _get_secret("DB_PASS", "passwd")
+DB_PASS = _get_secret("DB_PASS", "Password123")
 
 @st.cache_resource
 def get_db_connection():
