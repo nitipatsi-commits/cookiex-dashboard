@@ -121,6 +121,19 @@ inject_theme()
 # ==========================================
 # 🟢 เชื่อมต่อ PostgreSQL Database (Auto-Reconnect & Keepalive)
 # ==========================================
+def _get_secret(key, default=""):
+    try:
+        val = st.secrets.get(key, default)
+        return default if val is None else val
+    except Exception:
+        return default
+
+DB_HOST = _get_secret("DB_HOST", "34.87.134.194")
+DB_PORT = int(_get_secret("DB_PORT", 5432))
+DB_NAME = _get_secret("DB_NAME", "cookiebot_db")
+DB_USER = _get_secret("DB_USER", "postgres")
+DB_PASS = _get_secret("DB_PASS", "Password123")
+
 def _create_db_connection():
     """สร้าง connection ใหม่ พร้อมตั้งค่า TCP Keepalive ป้องกัน GCP VM ตัดการเชื่อมต่อเมื่อ idle"""
     conn = psycopg2.connect(
@@ -137,7 +150,9 @@ def _create_db_connection():
     )
     conn.autocommit = True
     return conn
+
 _global_conn = None
+
 def _get_live_conn():
     """เช็คและคืน connection ที่ใช้งานได้จริง ถ้าหลุดหรือ closed ไปแล้วจะสร้างใหม่ให้อัตโนมัติ"""
     global _global_conn
@@ -148,15 +163,20 @@ def _get_live_conn():
             return _global_conn
     except Exception:
         pass
+
     try:
         if _global_conn is not None:
             _global_conn.close()
     except Exception:
         pass
+
     _global_conn = _create_db_connection()
     return _global_conn
+
 def get_db_connection():
     return _get_live_conn()
+
+
 @st.cache_data(ttl=15, show_spinner=False)
 def db_query_cached(sql, params=None):
     """query ที่ cache ผลไว้ 15 วินาที พร้อม retry ต่อใหม่อัตโนมัติถ้าเน็ตหลุด"""
@@ -171,6 +191,8 @@ def db_query_cached(sql, params=None):
             _global_conn = None
             if attempt == 1:
                 raise
+
+
 def db_query(sql, params=None, fetch=True):
     """query สดใหม่ พร้อมระบบ auto-reconnect อัตโนมัติ"""
     for attempt in range(2):
@@ -186,6 +208,8 @@ def db_query(sql, params=None, fetch=True):
             _global_conn = None
             if attempt == 1:
                 raise
+
+
 def db_execute(sql, params=None):
     """รันคำสั่ง INSERT/UPDATE/DELETE พร้อมระบบ auto-reconnect"""
     for attempt in range(2):
@@ -203,6 +227,8 @@ def db_execute(sql, params=None):
         db_query_cached.clear()
     except Exception:
         pass
+
+
 
 ADMIN_DISCORD_WEBHOOK = _get_secret("ADMIN_DISCORD_WEBHOOK", "")
 GDRIVE_FOLDER_ID = _get_secret("GDRIVE_FOLDER_ID", "")
