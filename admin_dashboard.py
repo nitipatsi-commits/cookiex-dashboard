@@ -1,3 +1,4 @@
+
 import base64
 from datetime import date, datetime, timedelta, timezone
 import io
@@ -10,8 +11,8 @@ import time
 import numpy as np
 import pandas as pd
 import altair as alt
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import pymysql
+import pymysql.cursors
 import requests
 import streamlit as st
 from PIL import Image
@@ -119,7 +120,7 @@ def page_header(title, subtitle=""):
 inject_theme()
 
 # ==========================================
-# 🟢 เชื่อมต่อ PostgreSQL Database (Auto-Reconnect & Keepalive)
+# 🟢 เชื่อมต่อ PostgreSQL Database (Google Cloud VM)
 # ==========================================
 def _get_secret(key, default=""):
     try:
@@ -127,108 +128,70 @@ def _get_secret(key, default=""):
         return default if val is None else val
     except Exception:
         return default
-
-DB_HOST = _get_secret("DB_HOST", "34.87.134.194")
-DB_PORT = int(_get_secret("DB_PORT", 5432))
-DB_NAME = _get_secret("DB_NAME", "cookiebot_db")
-DB_USER = _get_secret("DB_USER", "postgres")
-DB_PASS = _get_secret("DB_PASS", "Password123")
-
-def _create_db_connection():
-    """สร้าง connection ใหม่ พร้อมตั้งค่า TCP Keepalive ป้องกัน GCP VM ตัดการเชื่อมต่อเมื่อ idle"""
-    conn = psycopg2.connect(
+# 🟢 MySQL Database Configuration
+# 🟢 อ่านค่าจาก Secrets ก่อน ถ้าไม่ได้ตั้งใช้ค่า default (เซิร์ฟเวอร์จริง)
+#    ทำให้ไฟล์เดียว deploy ได้ทั้ง local และ host โดยไม่ต้องแก้โค้ด
+DB_HOST = str(_get_secret("DB_HOST", "136.85.99.171"))
+try:
+    DB_PORT = int(_get_secret("DB_PORT", 3306))
+except Exception:
+    DB_PORT = 3306
+DB_NAME = str(_get_secret("DB_NAME", "cookiebot_db"))
+DB_USER = str(_get_secret("DB_USER", "postgres"))
+DB_PASS = str(_get_secret("DB_PASS", "password"))
+@st.cache_resource
+def get_db_connection():
+    """เปิด connection ใหม่กับ MySQL แบบ autocommit และคืนค่าเป็น Dict"""
+    conn = pymysql.connect(
         host=DB_HOST,
         port=DB_PORT,
-        dbname=DB_NAME,
         user=DB_USER,
         password=DB_PASS,
-        connect_timeout=5,
-        keepalives=1,
-        keepalives_idle=30,
-        keepalives_interval=10,
-        keepalives_count=5
+        database=DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True,
+        connect_timeout=5
     )
-    conn.autocommit = True
     return conn
-
-_global_conn = None
-
 def _get_live_conn():
-    """เช็คและคืน connection ที่ใช้งานได้จริง ถ้าหลุดหรือ closed ไปแล้วจะสร้างใหม่ให้อัตโนมัติ"""
-    global _global_conn
+    """คืน connection ที่ใช้งานได้จริง ถ้าหลุดจะต่อใหม่ให้อัตโนมัติ"""
     try:
-        if _global_conn is not None and getattr(_global_conn, "closed", 1) == 0:
-            with _global_conn.cursor() as c:
-                c.execute("SELECT 1;")
-            return _global_conn
+        conn = get_db_connection()
+        if not conn.open:
+            raise pymysql.InterfaceError("connection closed")
+        with conn.cursor() as _c:
+            _c.execute("SELECT 1;")
+        return conn
     except Exception:
-        pass
-
-    try:
-        if _global_conn is not None:
-            _global_conn.close()
-    except Exception:
-        pass
-
-    _global_conn = _create_db_connection()
-    return _global_conn
-
-def get_db_connection():
-    return _get_live_conn()
-
-
+        try:
+            get_db_connection.clear()
+        except Exception:
+            pass
+        return get_db_connection()
 @st.cache_data(ttl=15, show_spinner=False)
 def db_query_cached(sql, params=None):
-    """query ที่ cache ผลไว้ 15 วินาที พร้อม retry ต่อใหม่อัตโนมัติถ้าเน็ตหลุด"""
-    for attempt in range(2):
-        try:
-            conn = _get_live_conn()
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(sql, params or ())
-                return [dict(r) for r in cur.fetchall()]
-        except (psycopg2.InterfaceError, psycopg2.OperationalError):
-            global _global_conn
-            _global_conn = None
-            if attempt == 1:
-                raise
-
-
+    """query ที่ cache ผลไว้ 15 วินาที ดึงเสร็จคืนผลลัพธ์ทันที"""
+    conn = _get_live_conn()
+    with conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        return cur.fetchall()
 def db_query(sql, params=None, fetch=True):
-    """query สดใหม่ พร้อมระบบ auto-reconnect อัตโนมัติ"""
-    for attempt in range(2):
-        try:
-            conn = _get_live_conn()
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute(sql, params or ())
-                if fetch:
-                    return cur.fetchall()
-                return []
-        except (psycopg2.InterfaceError, psycopg2.OperationalError):
-            global _global_conn
-            _global_conn = None
-            if attempt == 1:
-                raise
-
-
+    """query สดใหม่"""
+    conn = _get_live_conn()
+    with conn.cursor() as cur:
+        cur.execute(sql, params or ())
+        if fetch:
+            return cur.fetchall()
+        return []
 def db_execute(sql, params=None):
-    """รันคำสั่ง INSERT/UPDATE/DELETE พร้อมระบบ auto-reconnect"""
-    for attempt in range(2):
-        try:
-            conn = _get_live_conn()
-            with conn.cursor() as cur:
-                cur.execute(sql, params or ())
-            break
-        except (psycopg2.InterfaceError, psycopg2.OperationalError):
-            global _global_conn
-            _global_conn = None
-            if attempt == 1:
-                raise
+    """รันคำสั่ง INSERT/UPDATE/DELETE"""
+    conn = _get_live_conn()
+    with conn.cursor() as cur:
+        cur.execute(sql, params or ())
     try:
         db_query_cached.clear()
     except Exception:
         pass
-
-
 
 ADMIN_DISCORD_WEBHOOK = _get_secret("ADMIN_DISCORD_WEBHOOK", "")
 GDRIVE_FOLDER_ID = _get_secret("GDRIVE_FOLDER_ID", "")
@@ -488,20 +451,25 @@ ensure_audit_table()
 _worker_local = threading.local()
 
 def _get_worker_conn():
-    """connection แยกของ relay worker thread (ปลอดภัยต่อการใช้ข้าม psycopg2 thread)"""
+    """connection แยกของ relay worker thread สำหรับ MySQL"""
     conn = getattr(_worker_local, "conn", None)
     try:
-        if conn is not None and conn.closed == 0:
+        if conn is not None and conn.open:
             with conn.cursor() as _c:
                 _c.execute("SELECT 1;")
             return conn
     except Exception:
         pass
-    conn = psycopg2.connect(
-        host=DB_HOST, port=DB_PORT, dbname=DB_NAME,
-        user=DB_USER, password=DB_PASS, connect_timeout=5
+    conn = pymysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASS,
+        database=DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True,
+        connect_timeout=5
     )
-    conn.autocommit = True
     _worker_local.conn = conn
     return conn
 
@@ -509,15 +477,20 @@ def discord_relay_worker():
     while True:
         try:
             conn = _get_worker_conn()
-            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            with conn.cursor() as cur:
+                # 🟢 ดึงข้อมูลแจ้งเตือนที่ค้างอยู่
                 cur.execute("""
-                    UPDATE user_monitors
-                    SET pending_alert_msg = NULL, pending_alert_img = NULL
-                    WHERE pending_alert_msg IS NOT NULL AND pending_alert_msg != ''
-                    RETURNING id, license_key, hwid, pending_alert_msg, pending_alert_img;
+                    SELECT id, license_key, hwid, pending_alert_msg, pending_alert_img 
+                    FROM user_monitors 
+                    WHERE pending_alert_msg IS NOT NULL AND pending_alert_msg != '';
                 """)
                 rows = cur.fetchall()
-            # autocommit = True → ไม่ต้อง commit เอง แถวถูกล้างทันทีแบบถาวร
+                if rows:
+                    ids = [r["id"] for r in rows if "id" in r]
+                    if ids:
+                        fmt = ','.join(['%s'] * len(ids))
+                        cur.execute(f"UPDATE user_monitors SET pending_alert_msg = NULL, pending_alert_img = NULL WHERE id IN ({fmt});", tuple(ids))
+            
             if rows:
                 for row in rows:
                     msg = row.get("pending_alert_msg")
@@ -714,7 +687,7 @@ if menu == "🏠 ภาพรวม (Overview)":
             # 🟢 [FIX] กรองเฉพาะเซสชันที่ส่ง Heartbeat ภายใน 60 วินาที (เดิมนับรวมแถวค้างเก่า ตัวเลขฟอก)
             sess_ov = db_query_cached(
                 "SELECT session_id FROM active_sessions "
-                "WHERE last_heartbeat >= NOW() - INTERVAL '60 seconds' OR last_heartbeat IS NULL;"
+                "WHERE last_heartbeat >= NOW() - INTERVAL 60 SECOND OR last_heartbeat IS NULL;"
             )
             st.metric("จอที่เปิดใช้งานตอนนี้", f"{len(sess_ov)} จอ")
         except Exception as e:
@@ -947,13 +920,19 @@ elif menu == "🔑 Key Manager (จัดการคีย์)":
             df_keys["display_screens"] = df_keys.get("max_sessions", 1).apply(lambda x: safe_int(x, 1))
             df_keys["is_active_bool"] = df_keys.get("is_active", True).astype(bool)
 
-            exp_series = pd.to_datetime(df_keys["expire_date"], errors="coerce")
+            if "expire_date" in df_keys.columns:
+                exp_col = df_keys["expire_date"]
+            elif "expires_at" in df_keys.columns:
+                exp_col = df_keys["expires_at"]
+            else:
+                exp_col = pd.Series([None] * len(df_keys))
+            exp_series = pd.to_datetime(exp_col, errors="coerce")
             now_ts = pd.Timestamp(now_thai_val.replace(tzinfo=None))
 
             # 🟢 [FIX] ตรวจสอบคีย์ที่กำลังออนไลน์อยู่จริงจาก active_sessions ที่ส่ง Heartbeat ภายใน 60 วินาที
             active_sess_rows = db_query("""
                 SELECT DISTINCT license_key FROM active_sessions 
-                WHERE last_heartbeat >= NOW() - INTERVAL '60 seconds' OR last_heartbeat IS NULL;
+                WHERE last_heartbeat >= NOW() - INTERVAL 60 SECOND OR last_heartbeat IS NULL;
             """)
             active_key_set = {str(r["license_key"]).strip() for r in active_sess_rows if r.get("license_key")} if active_sess_rows else set()
 
@@ -1382,13 +1361,13 @@ elif menu == "💻 Active Sessions (เซสชันจอสด)":
         # 🟢 1. สั่งลบเซสชันที่ขาดการส่ง Heartbeat เกิน 60 วินาทีทิ้งอัตโนมัติ (เคลียร์ของเก่าที่ค้างออก)
         db_execute("""
             DELETE FROM active_sessions 
-            WHERE last_heartbeat < NOW() - INTERVAL '60 seconds';
+            WHERE last_heartbeat < NOW() - INTERVAL 60 SECOND;
         """)
 
         # 🟢 2. ดึงเฉพาะเซสชันที่มีชีวิตอยู่จริงในปัจจุบัน (ส่ง Heartbeat ภายใน 60 วินาที)
         sess_data = db_query("""
             SELECT * FROM active_sessions 
-            WHERE last_heartbeat >= NOW() - INTERVAL '60 seconds' OR last_heartbeat IS NULL
+            WHERE last_heartbeat >= NOW() - INTERVAL 60 SECOND OR last_heartbeat IS NULL
             ORDER BY id DESC;
         """)
 
