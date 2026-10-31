@@ -1,35 +1,3 @@
-# -*- coding: utf-8 -*-
-# ============================================================
-#  COOKIE X ADMIN DASHBOARD - HOST VERSION v2 (dual-engine)
-#
-#  🟢 ใส่ค่า DB อะไรใน Secrets ก็ใช้ได้:
-#     DB_PORT = 3306  ->  MySQL / MariaDB  (pymysql)
-#     DB_PORT = 5432  ->  PostgreSQL       (psycopg2)
-#     หรือ force เอง: DB_ENGINE = "postgres" / "mariadb"
-#
-#  [requirements.txt]
-#     streamlit
-#     pandas
-#     altair
-#     pymysql
-#     psycopg2-binary
-#     requests
-#     pillow
-#     numpy
-#     streamlit-autorefresh
-#
-#  [ตัวอย่าง Secrets - PostgreSQL แบบที่เคยใช้ได้]
-#     ADMIN_PIN = "7692"
-#     DB_HOST = "34.87.134.194"
-#     DB_PORT = 5432
-#     DB_NAME = "cookiebot_db"
-#     DB_USER = "postgres"
-#     DB_PASS = "Password123"
-#     ADMIN_DISCORD_WEBHOOK = "https://..."
-#
-#  รันบน VPS:  streamlit run admin_dashboard_HOST.py --server.port 8501 --server.headless true
-# ============================================================
-
 import base64
 from datetime import date, datetime, timedelta, timezone
 import io
@@ -47,14 +15,6 @@ import pymysql.cursors
 import requests
 import streamlit as st
 from PIL import Image
-
-# 🟢 [HOST] โหลด driver ทั้งสองตระกูลไว้ — ใช้ตัวไหนก็ได้ตามที่ตั้งใน Secrets
-try:
-    import psycopg2
-    import psycopg2.extras
-    HAS_PG = True
-except ImportError:
-    HAS_PG = False
 
 # ไลบรารีสำหรับ Google Drive API (สำรอง - ไม่บังคับใช้)
 try:
@@ -168,65 +128,14 @@ def _get_secret(key, default=""):
     except Exception:
         return default
 # 🟢 MySQL Database Configuration
-# 🟢 [HOST] อ่านค่า DB ทั้งหมดจาก Secrets — ใส่ค่าอะไรก็วิ่งตาม
-DB_HOST = str(_get_secret("DB_HOST", "136.85.99.171"))
-try:
-    DB_PORT = int(_get_secret("DB_PORT", 3306))
-except Exception:
-    DB_PORT = 3306
-DB_NAME = str(_get_secret("DB_NAME", "cookiebot_db"))
-DB_USER = str(_get_secret("DB_USER", "postgres"))
-DB_PASS = str(_get_secret("DB_PASS", "password"))
-
-# 🟢 [HOST] เลือกชนิดฐานข้อมูลอัตโนมัติ:
-#    พอร์ต 5432 = PostgreSQL / 3306 = MySQL-MariaDB
-#    (จะ force เองก็ได้ โดยเพิ่ม secret: DB_ENGINE = "postgres" หรือ "mariadb")
-DB_ENGINE = str(_get_secret("DB_ENGINE", "")).strip().lower()
-if not DB_ENGINE:
-    DB_ENGINE = "postgres" if DB_PORT == 5432 else "mariadb"
-if DB_ENGINE in ("postgres", "postgresql", "pg"):
-    DB_ENGINE = "postgres"
-    if not HAS_PG:
-        raise RuntimeError("DB_ENGINE=postgres แต่ไม่มี psycopg2 — เพิ่ม psycopg2-binary ใน requirements.txt")
-else:
-    DB_ENGINE = "mariadb"
-print(f"[DB] engine={DB_ENGINE} host={DB_HOST}:{DB_PORT} name={DB_NAME}")
-def _open_cursor(conn):
-    """🟢 [HOST] เปิด cursor แบบ dict-row ให้ตรงกับ engine ที่ใช้"""
-    if DB_ENGINE == "postgres":
-        return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    return conn.cursor()
-
-def _conn_is_open(conn):
-    """🟢 [HOST] เช็คสถานะ connection ให้ตรงกับ engine"""
-    try:
-        if DB_ENGINE == "postgres":
-            return not conn.closed
-        return conn.open
-    except Exception:
-        return False
-
-def _sql(sql):
-    """🟢 [HOST] แปลง SQL ให้ตรงภาษาของ engine (MySQL <-> PostgreSQL)"""
-    if DB_ENGINE == "postgres" and sql:
-        return (sql.replace("NOW() - INTERVAL 60 SECOND", "NOW() - INTERVAL '60 seconds'")
-                   .replace("NOW() - INTERVAL 60 second", "NOW() - INTERVAL '60 seconds'"))
-    return sql
-
+DB_HOST = "136.85.99.171"
+DB_PORT = 3306
+DB_NAME = "cookiebot_db"
+DB_USER = "postgres"
+DB_PASS = "password"
 @st.cache_resource
 def get_db_connection():
-    """เปิด connection ใหม่ (autocommit) ตาม engine ที่เลือกจาก Secrets"""
-    if DB_ENGINE == "postgres":
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS,
-            connect_timeout=5
-        )
-        conn.autocommit = True
-        return conn
+    """เปิด connection ใหม่กับ MySQL แบบ autocommit และคืนค่าเป็น Dict"""
     conn = pymysql.connect(
         host=DB_HOST,
         port=DB_PORT,
@@ -238,14 +147,13 @@ def get_db_connection():
         connect_timeout=5
     )
     return conn
-
 def _get_live_conn():
     """คืน connection ที่ใช้งานได้จริง ถ้าหลุดจะต่อใหม่ให้อัตโนมัติ"""
     try:
         conn = get_db_connection()
-        if not _conn_is_open(conn):
-            raise Exception("connection closed")
-        with _open_cursor(conn) as _c:
+        if not conn.open:
+            raise pymysql.InterfaceError("connection closed")
+        with conn.cursor() as _c:
             _c.execute("SELECT 1;")
         return conn
     except Exception:
@@ -254,29 +162,26 @@ def _get_live_conn():
         except Exception:
             pass
         return get_db_connection()
-
 @st.cache_data(ttl=15, show_spinner=False)
 def db_query_cached(sql, params=None):
     """query ที่ cache ผลไว้ 15 วินาที ดึงเสร็จคืนผลลัพธ์ทันที"""
     conn = _get_live_conn()
-    with _open_cursor(conn) as cur:
-        cur.execute(_sql(sql), params or ())
+    with conn.cursor() as cur:
+        cur.execute(sql, params or ())
         return cur.fetchall()
-
 def db_query(sql, params=None, fetch=True):
     """query สดใหม่"""
     conn = _get_live_conn()
-    with _open_cursor(conn) as cur:
-        cur.execute(_sql(sql), params or ())
+    with conn.cursor() as cur:
+        cur.execute(sql, params or ())
         if fetch:
             return cur.fetchall()
         return []
-
 def db_execute(sql, params=None):
     """รันคำสั่ง INSERT/UPDATE/DELETE"""
     conn = _get_live_conn()
-    with _open_cursor(conn) as cur:
-        cur.execute(_sql(sql), params or ())
+    with conn.cursor() as cur:
+        cur.execute(sql, params or ())
     try:
         db_query_cached.clear()
     except Exception:
@@ -539,20 +444,17 @@ ensure_audit_table()
 # ==========================================
 _worker_local = threading.local()
 
-def _new_worker_conn():
-    """🟢 [HOST] สร้าง connection ใหม่แยกของ thread ตาม engine"""
-    if DB_ENGINE == "postgres":
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS,
-            connect_timeout=5
-        )
-        conn.autocommit = True
-        return conn
-    return pymysql.connect(
+def _get_worker_conn():
+    """connection แยกของ relay worker thread สำหรับ MySQL"""
+    conn = getattr(_worker_local, "conn", None)
+    try:
+        if conn is not None and conn.open:
+            with conn.cursor() as _c:
+                _c.execute("SELECT 1;")
+            return conn
+    except Exception:
+        pass
+    conn = pymysql.connect(
         host=DB_HOST,
         port=DB_PORT,
         user=DB_USER,
@@ -562,18 +464,6 @@ def _new_worker_conn():
         autocommit=True,
         connect_timeout=5
     )
-
-def _get_worker_conn():
-    """connection แยกของ relay worker thread (รองรับ MySQL + PostgreSQL)"""
-    conn = getattr(_worker_local, "conn", None)
-    try:
-        if conn is not None and _conn_is_open(conn):
-            with _open_cursor(conn) as _c:
-                _c.execute("SELECT 1;")
-            return conn
-    except Exception:
-        pass
-    conn = _new_worker_conn()
     _worker_local.conn = conn
     return conn
 
