@@ -1,7 +1,8 @@
 streamlit
-streamlit-autorefresh
-psycopg2-binary
 pandas
 altair
+pymysql
 requests
 pillow
+numpy
+streamlit-autorefresh
